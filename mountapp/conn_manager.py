@@ -270,11 +270,18 @@ LEVELDB_DIR = os.path.expanduser(
     "~/Library/Application Support/小米智能存储/Partitions/session/Local Storage/leveldb")
 
 
+_LEVELDB_CACHE = {"t": 0.0, "user": None, "pwd": None}  # 凭证缓存（避免每轮重复读几十 MB LevelDB）
+
+
 def read_webdav_from_leveldb():
     """兜底：从官方 App 的 localStorage(LevelDB) 读取缓存的 WebDAV 密码。
     官方 App 会把 {username, password, port, uri} 写进 localStorage，
     密码字段在 Snappy 压缩块中可能被打散，但密码本体保持连续可打印。
-    返回 (username, password) 或 (None, None)。"""
+    返回 (username, password) 或 (None, None)。
+    结果缓存 120 秒（凭证稳定，避免高频大文件读取拉高内存与 CPU）。"""
+    now = time.time()
+    if now - _LEVELDB_CACHE["t"] < 120:
+        return _LEVELDB_CACHE["user"], _LEVELDB_CACHE["pwd"]
     try:
         files = [os.path.join(LEVELDB_DIR, f)
                  for f in os.listdir(LEVELDB_DIR)
@@ -311,6 +318,7 @@ def read_webdav_from_leveldb():
             if m:
                 user = "u" + m.group(1)
         if user and best:
+            _LEVELDB_CACHE.update(t=now, user=user, pwd=best)
             return user, best
         return None, None
     except Exception:

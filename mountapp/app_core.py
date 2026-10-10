@@ -5,6 +5,7 @@
 """
 import os
 import sys
+import re
 import time
 import json
 import shutil
@@ -28,7 +29,12 @@ DEFAULT_CONFIG = {
     "auto_mount": True,       # 连接后自动挂载
     "auto_start": False,      # 登录时自动启动
     "mount_dir": "",          # 空 = 挂载到 /Volumes（Finder 侧边栏可见）
+    "quark_auto_mount": True, # 开机自动挂载夸克网盘
 }
+
+# 夸克网盘 WebDAV（qdav 桥接）
+QUARK_URL = "http://MzNMukSvvH:DyJyaZBte6@118.89.62.59:5050/"
+QUARK_VOLUME = "/Volumes/118.89.62.59"
 
 
 class AppCore:
@@ -45,6 +51,7 @@ class AppCore:
         self._stop = threading.Event()
         self._thread = None
         self._dead_streak = 0  # 连续探活失败次数（用于卸载死挂载）
+        self._stale_streak = 0  # 连续死挂载检测次数（mount 表在但挂载点读不出真实内容）
 
     # ---------- 配置 ----------
     def _load_config(self):
@@ -137,9 +144,14 @@ class AppCore:
 
     # ---------- 挂载 ----------
     def find_mount_path(self):
-        """WebDAV 挂载点通常为 /Volumes/127.0.0.1"""
+        """WebDAV 挂载点通常为 /Volumes/127.0.0.1
+        结果缓存 10 秒：已挂载时避免每 2 秒跑 /sbin/mount 子进程（省 CPU）"""
         if self.config.get("mount_dir"):
             return self.config["mount_dir"]
+        if (self.mount_path and os.path.isdir(self.mount_path)
+                and time.time() - getattr(self, "_mp_ts", 0) < 10):
+            return self.mount_path
+        self._mp_ts = time.time()
         for name in os.listdir("/Volumes"):
             p = os.path.join("/Volumes", name)
             if os.path.ismount(p):
@@ -218,6 +230,44 @@ class AppCore:
         subprocess.Popen(["open", p])
         return True, p
 
+    # ---------- 夸克网盘 ----------
+    def quark_is_mounted(self):
+        return os.path.ismount(QUARK_VOLUME)
+
+    def quark_mount(self):
+        if self.quark_is_mounted():
+            return True, "已挂载"
+        try:
+            r = subprocess.run(
+                ["osascript", "-e", f'mount volume "{QUARK_URL}"'],
+                capture_output=True, text=True, timeout=40)
+            time.sleep(3)
+            if self.quark_is_mounted():
+                return True, "夸克网盘挂载成功"
+            return False, (r.stderr or r.stdout or "挂载失败").strip()[:150]
+        except Exception as e:
+            return False, str(e)
+
+    def quark_unmount(self):
+        if not self.quark_is_mounted():
+            return True, "未挂载"
+        try:
+            subprocess.run(["umount", QUARK_VOLUME], capture_output=True, timeout=20)
+            time.sleep(1)
+            if not self.quark_is_mounted():
+                return True, "已卸载"
+            # 强制
+            subprocess.run(["diskutil", "unmount", QUARK_VOLUME], capture_output=True, timeout=20)
+            return not self.quark_is_mounted(), "已卸载"
+        except Exception as e:
+            return False, str(e)
+
+    def quark_open_finder(self):
+        if not self.quark_is_mounted():
+            return False, "未挂载"
+        subprocess.Popen(["open", QUARK_VOLUME])
+        return True, QUARK_VOLUME
+
     # ---------- 挂载健康自愈 ----------
     def proxy_alive(self, timeout=3):
         """通过本地代理探测上游：代理 200/207 说明隧道+凭证正常。
@@ -233,9 +283,44 @@ class AppCore:
         except Exception:
             return False
 
+    def mount_point_alive(self, timeout=8):
+        """验证挂载点是否真实可用（防 macOS 死挂载：mount 表在但连接已断，Finder 打不开）。
+        方法：通过挂载点读取根目录列表，与代理 PROPFIND 的权威目录集合对比。
+        挂载点能列出任一真实条目即视为活着；读不到（失败/超时/空缓存）则判死。"""
+        p = self.find_mount_path()
+        if not p:
+            return False
+        try:
+            r = subprocess.run(["ls", "-1A", p], capture_output=True,
+                               text=True, timeout=timeout)
+            if r.returncode != 0:
+                return False
+            local_items = {x for x in r.stdout.splitlines()
+                           if x and not x.startswith(".")}
+        except subprocess.TimeoutExpired:
+            return False
+        except Exception:
+            return False
+        # 代理 PROPFIND 根目录，作为权威集合
+        try:
+            r2 = subprocess.run(
+                ["curl", "-s", "-m", str(timeout), "-u",
+                 "%s:%s" % (mp.UP.snapshot()["username"], mp.UP.snapshot()["password"]),
+                 "-X", "PROPFIND", "-H", "Depth: 1", MOUNT_URL],
+                capture_output=True, text=True, timeout=timeout + 2)
+            remote_items = {x for x in re.findall(
+                r"<[A-Za-z_][\w.-]*:?displayname>([^<]+)</[A-Za-z_][\w.-]*:?displayname>",
+                r2.stdout or "") if x and not x.startswith(".")}
+        except Exception:
+            remote_items = set()
+        if not remote_items:
+            return True  # 拿不到权威列表时不判死，避免误杀
+        return bool(local_items & remote_items)
+
     def ensure_mount_health(self):
         """自愈：挂载存在但上游已死（连续 N 次）→ 卸载清理死挂载（消除 macOS
-        「重新连接」弹窗）；上游恢复且未挂载 → 自动重新挂载。
+        「重新连接」弹窗）；上游恢复且未挂载 → 自动重新挂载；
+        挂载点死（mount 表在但读不出真实内容）→ 卸载后自动重挂。
         凭证未就绪时跳过（避免应用启动瞬间误判误卸）。"""
         up = mp.UP.snapshot()
         if not (up["username"] and up["password"]):
@@ -244,10 +329,26 @@ class AppCore:
         alive = self.proxy_alive()
         if alive:
             self._dead_streak = 0
-            if not mounted and self.config.get("auto_mount") and self.conn.snapshot()["connected"]:
-                self.mount()
+            if not mounted:
+                self._stale_streak = 0
+                if self.config.get("auto_mount") and self.conn.snapshot()["connected"]:
+                    self.mount()
+                return
+            # 已挂载：检测死挂载（挂载点读不出真实内容，连续2次则重挂）
+            if not self.mount_point_alive():
+                self._stale_streak += 1
+                if self._stale_streak >= 2:
+                    self.status_text = "检测到挂载失效，正在重新挂载…"
+                    self.unmount()
+                    time.sleep(1)
+                    ok, _ = self.mount()
+                    self.status_text = "已自动重新挂载" if ok else "重新挂载失败，稍后重试"
+                    self._stale_streak = 0
+            else:
+                self._stale_streak = 0
             return
         # 上游不可达
+        self._stale_streak = 0
         self._dead_streak += 1
         if mounted and self._dead_streak >= 2:
             self.status_text = "隧道波动，已清理失效挂载，恢复后自动重连"
