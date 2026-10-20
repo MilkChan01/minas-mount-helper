@@ -15,6 +15,10 @@ import threading
 
 MAX_LINE = 64 * 1024
 
+# 只读命令：不持全局/写锁，避免被慢写命令（如 NetFS 挂载）阻塞；
+# 写命令仍在全局锁内串行执行，杜绝交错写/并发 CAS。
+READONLY_CMDS = frozenset({"status", "get_config"})
+
 
 class IpcProtocolError(Exception):
     """结构非法（非 JSON / 缺 cmd / 类型错 / 超长），零副作用。"""
@@ -129,8 +133,12 @@ class IpcServer:
                 raise IpcProtocolError("缺少字符串命令 cmd", "missing_cmd")
             if not isinstance(args, dict):
                 raise IpcProtocolError("args 必须是对象", "bad_args")
-            # 串行化：命令按到达顺序逐个执行，杜绝交错写/并发 CAS
-            with self._lock:
+            # 只读命令不持全局锁，慢写命令（NetFS 挂载）不阻塞 status/get_config；
+            # 写命令仍在全局锁内串行执行，杜绝交错写/并发 CAS。
+            if cmd not in READONLY_CMDS:
+                with self._lock:
+                    data = self._dispatch(cmd, args)
+            else:
                 data = self._dispatch(cmd, args)
             self._write(conn, {"ok": True, "id": request_id,
                                "error": None, "data": data})

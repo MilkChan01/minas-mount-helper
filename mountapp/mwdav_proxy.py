@@ -595,7 +595,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._authorized():
             self._send_simple(
                 401, b"Unauthorized",
-                extra_headers={"WWW-Authenticate": 'Basic realm="MiNAS"'})
+                extra_headers={"WWW-Authenticate": 'Basic realm="MiNAS"'},
+                close=True)
+            # close=True 后直接返回，不按字节界排空声明体（无时间界/不按
+            # Content-Length 收尾会在客户端不 EOF 时 stall）；沿 Expect/401 模式。
             return
 
         # 4. Finder 元数据快速 404

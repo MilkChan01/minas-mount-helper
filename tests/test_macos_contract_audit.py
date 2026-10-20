@@ -267,7 +267,11 @@ class MacosContractAudit(unittest.TestCase):
     def test_m09_ipc_client_reuses_and_closes_reader(self):
         fake_sock = Mock()
         fake_reader = Mock()
-        fake_reader.readline.return_value = '{"ok":true,"data":{}}\n'
+        # 严格匹配请求 id：两次请求分别回 id=1、id=2。
+        fake_reader.readline.side_effect = [
+            '{"ok":true,"id":1,"data":{}}\n',
+            '{"ok":true,"id":2,"data":{}}\n',
+        ]
         fake_sock.makefile.return_value = fake_reader
         c = ipc_client.IpcClient("/tmp/fake")
         c._sock = fake_sock

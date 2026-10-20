@@ -133,7 +133,14 @@ class TlsLoopbackHandshakeTest(unittest.TestCase):
                 chunks.append(chunk)
             data = b"".join(chunks)
         finally:
-            raw.close()
+            # 握手成功关闭 SSLSocket（连带关闭底层 raw）；失败未建 ss 才关 raw。
+            try:
+                if "ss" in locals():
+                    ss.close()
+                else:
+                    raw.close()
+            except OSError:
+                pass
         status = int(data.split(b"\r\n", 1)[0].split()[1])
         body = data.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in data else b""
         # 去掉尾部 chunked/长度残留，仅保留响应实体

@@ -39,12 +39,22 @@ def human_size(n):
 
 
 class _ServiceCore:
-    """把 IpcClient 适配成旧 App.refresh 期望的只读/命令接口（无后台线程、无凭证）。"""
+    """把 IpcClient 适配成旧 App.refresh 期望的只读/命令接口（无凭证）。
 
-    def __init__(self, client):
-        self._c = client
+    双连接隔离：status client 专供后台线程拉取快照并缓存，command client 专供
+    异步写命令。Tk 主线程只读本对象缓存，不发起同步网络调用，避免 socket
+    timeout（最长 10s）冻结界面；慢写命令（挂载）也不再阻塞状态刷新。
+    """
+
+    def __init__(self, client, cmd_client=None, pump=True):
+        # client 专供状态快照；cmd_client 专供异步写命令（可与 client 隔离）。
+        # 仅传 client 时二者共用，保持旧构造契约。
+        self._status_c = client
+        self._cmd_c = cmd_client or client
+        self._cached = None
+        self._stop = threading.Event()
         try:
-            cfg = self._c.call("get_config")
+            cfg = self._cmd_c.call("get_config")
         except Exception:
             cfg = {}
         self.config = {
@@ -54,18 +64,31 @@ class _ServiceCore:
         }
         self.status_text = ""
         self.mount_path = None
+        if pump:
+            self._pump = threading.Thread(
+                target=self._pump_status, args=(1.5,), daemon=True)
+            self._pump.start()
 
     def start(self):
         """服务已在常驻进程运行；GUI 不重复启动。"""
         return None
 
+    def _pump_status(self, interval):
+        """后台线程定时拉取脱敏快照写入缓存；主线程永不阻塞在网络上。"""
+        while not self._stop.is_set():
+            try:
+                self._cached = self._status_c.status()
+            except Exception as e:
+                self._cached = {"connected": False, "error": str(e), "mode": "",
+                                "webdav_port": None, "storage": [],
+                                "mounted": False, "mount_path": None}
+            self._stop.wait(interval)
+
     def _status(self):
-        try:
-            return self._c.status()
-        except Exception as e:
-            return {"connected": False, "error": str(e), "mode": "",
-                    "webdav_port": None, "storage": [], "mounted": False,
-                    "mount_path": None}
+        """主线程同步读取：直接返回缓存快照，不发起网络请求。"""
+        return self._cached or {"connected": False, "error": "", "mode": "",
+                                "webdav_port": None, "storage": [],
+                                "mounted": False, "mount_path": None}
 
     @property
     def conn(self):
@@ -84,25 +107,31 @@ class _ServiceCore:
         return bool(snap.get("mounted"))
 
     def mount(self):
-        return self._c.call("mount")
+        return self._cmd_c.call("mount")
 
     def unmount(self):
-        return self._c.call("unmount")
+        return self._cmd_c.call("unmount")
 
     def open_in_finder(self):
         try:
-            self._c.call("open_finder")
+            self._cmd_c.call("open_finder")
             return True, self.mount_path
         except Exception as e:
             return False, str(e)
 
     def set_auto_start(self, enabled):
-        data = self._c.call("set_config", {"auto_start": bool(enabled)})
+        data = self._cmd_c.call("set_config", {"auto_start": bool(enabled)})
         self.config.update(data)
 
     def save_config(self):
-        data = self._c.call("set_config", self.config)
+        data = self._cmd_c.call("set_config", self.config)
         self.config.update(data)
+
+    def save_settings(self, auto_mount, auto_start):
+        data = self._cmd_c.call("set_config", {
+            "auto_mount": bool(auto_mount), "auto_start": bool(auto_start)})
+        self.config.update(data)
+        return data
 
 
 class App(tk.Tk):
@@ -211,10 +240,8 @@ class App(tk.Tk):
     # ---------- 操作 ----------
     def _save_settings(self):
         try:
-            data = self.core._c.call("set_config", {
-                "auto_mount": self.auto_mount_var.get(),
-                "auto_start": self.auto_start_var.get()})
-            self.core.config.update(data)
+            self.core.save_settings(
+                self.auto_mount_var.get(), self.auto_start_var.get())
         except Exception as e:
             self.log_label.config(text=f"设置保存失败: {e}")
             # 回滚界面到服务端权威配置，避免复选框假装已生效。
@@ -304,15 +331,16 @@ class App(tk.Tk):
             self.log_label.config(text=self.core.status_text)
 
 
-def _ensure_service_client():
-    """连接常驻服务；socket 缺失时幂等拉起独立服务进程（凭证不进 argv）。"""
-    from client import IpcClient
+def _ensure_service_socket_path():
+    """连接常驻服务；socket 缺失时幂等拉起独立服务进程（凭证不进 argv），返回 socket 路径。"""
     from service import default_socket_path
     path = default_socket_path()
     try:
+        from client import IpcClient
         c = IpcClient(path)
         c.connect()
-        return c
+        c.close()
+        return path
     except (FileNotFoundError, ConnectionError, OSError):
         pass
     # 拉起常驻服务（独立会话，凭证仅经配置/状态文件，不进命令行）
@@ -320,22 +348,38 @@ def _ensure_service_client():
         [sys.executable, os.path.join(BASE_DIR, "main.py"), "--service"],
         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     import time
+    from client import IpcClient
     for _ in range(30):
         try:
             c = IpcClient(path)
             c.connect()
-            return c
+            c.close()
+            return path
         except (FileNotFoundError, ConnectionError, OSError):
             time.sleep(0.3)
     raise RuntimeError("常驻服务未在预期时间内就绪")
+
+
+def _connect_soft(client):
+    """初始连接失败受控降级：不向启动栈抛 traceback；只读由后台泵自动重连，
+    写命令在执行时明确报“结果未知/未连接”。"""
+    try:
+        client.connect()
+    except (FileNotFoundError, ConnectionError, OSError) as e:
+        print(f"警告：初始未连接到服务（稍后自动重试）: {e}", file=sys.stderr)
+    return client
 
 
 def main():
     if "--service" in sys.argv:
         from service import ResidentService
         raise SystemExit(ResidentService().serve())
-    client = _ensure_service_client()
-    app = App(_ServiceCore(client))
+    socket_path = _ensure_service_socket_path()
+    from client import IpcClient
+    # 复用探针已确认的 socket；两条连接初始失败均受控降级，不致 startup traceback。
+    status_c = _connect_soft(IpcClient(socket_path))
+    cmd_c = _connect_soft(IpcClient(socket_path))
+    app = App(_ServiceCore(status_c, cmd_c))
     app.mainloop()
     # GUI 关闭仅断开连接；常驻服务继续发现/自愈，不调用 stop。
 

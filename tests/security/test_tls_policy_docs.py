@@ -21,7 +21,10 @@ DOCS = {
 
 
 def _read(p):
-    return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    if not os.path.exists(p):
+        return ""
+    with open(p, encoding="utf-8") as f:
+        return f.read()
 
 
 class TlsPolicyDocsTest(unittest.TestCase):

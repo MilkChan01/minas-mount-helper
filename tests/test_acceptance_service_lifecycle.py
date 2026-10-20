@@ -135,6 +135,8 @@ class ServiceLifecycleTest(unittest.TestCase):
             [sys.executable, str(driver)], env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        # 关闭子进程管道 BufferedReader，避免 ResourceWarning 泄漏。
+        self.addCleanup(lambda: (proc.stdout.close(), proc.stderr.close()))
         sock = Path(env["ACC_SOCKET_DIR"]) / "mwdav.sock"
         wait_until(lambda: sock.exists(), timeout=8)
 

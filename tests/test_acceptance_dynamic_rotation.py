@@ -55,9 +55,10 @@ def _child_main(state_file, ready, done):
 
 class ChildProxy:
     def __init__(self, state_file):
-        # Linux 云端用 fork：spawn 子进程需重新导入 unittest 测试模块，
-        # 无仓库根 sys.path 会导致 target 不可导入、ready 队列空。
-        ctx = mp.get_context("fork")
+        # 显式使用 spawn：子进程从干净解释器启动，避免在已有代理工作线程的
+        # 多线程父进程中 fork（fork 在多线程进程里可能死锁并触发
+        # DeprecationWarning）。target 为本模块顶层函数，spawn 按引用可 pickle。
+        ctx = mp.get_context("spawn")
         self.ready, self.done = ctx.Queue(), ctx.Event()
         self.proc = ctx.Process(
             target=_child_main, args=(state_file, self.ready, self.done))

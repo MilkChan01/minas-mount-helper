@@ -57,6 +57,7 @@ class ServiceIpcTest(unittest.TestCase):
     # ---- SI-1：status 仅白名单键，响应不含凭证 ----
     def test_si1_status_whitelist_redacted(self):
         c = IpcClient(str(self.sock))
+        self.addCleanup(c.close)
         r = c.call("status")
         self.assertTrue(r["ok"], r)
         self.assertEqual(set(r["data"].keys()), STATUS_KEYS)
@@ -68,6 +69,7 @@ class ServiceIpcTest(unittest.TestCase):
     # ---- SI-2：未知命令 / 畸形 JSON / 非对象 / 缺 cmd → ok=false 零副作用 ----
     def test_si2_unknown_and_malformed_zero_side_effect(self):
         c = IpcClient(str(self.sock))
+        self.addCleanup(c.close)
         self.assertFalse(c.call("nope")["ok"])
         self.assertFalse(json.loads(c.raw("{not json}"))["ok"])
         self.assertFalse(json.loads(c.raw("[1,2]"))["ok"])
@@ -78,6 +80,7 @@ class ServiceIpcTest(unittest.TestCase):
     # ---- SI-3：set_config 路径/类型校验：逃逸/非 /Volumes/非布尔拒绝 ----
     def test_si3_set_config_validation(self):
         c = IpcClient(str(self.sock))
+        self.addCleanup(c.close)
         bad = [
             {"mount_dir": "/Volumes/../etc"},
             {"mount_dir": "/tmp/x"},
@@ -119,7 +122,9 @@ class ServiceIpcTest(unittest.TestCase):
         c1.close()
         self.assertTrue(c2.call("status")["ok"])
         c2.close()
-        self.assertTrue(IpcClient(str(self.sock)).call("status")["ok"])
+        c3 = IpcClient(str(self.sock))
+        self.addCleanup(c3.close)
+        self.assertTrue(c3.call("status")["ok"])
 
     # ---- SI-6：socket 0600、目录 0700 ----
     def test_si6_permissions(self):

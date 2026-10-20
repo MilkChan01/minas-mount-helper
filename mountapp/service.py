@@ -19,6 +19,7 @@ import time
 
 import conn_manager as cm
 import app_core as ac
+from ipc import READONLY_CMDS
 
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 18445
@@ -449,7 +450,8 @@ class ResidentService:
 
     # ---------- 脱敏 status（白名单，绝不含凭证） ----------
     def status_view(self) -> dict:
-        self._refresh_mount_state()
+        # 纯内存快照：不在这里探测/重写 mounted/path，避免读路径绕锁造成新竞争；
+        # mounted/path 仅由自愈 loop 与 mount/unmount 尾部刷新。
         return {
             "service_pid": os.getpid(),
             "connected": self._view.connected,
@@ -471,19 +473,22 @@ class ResidentService:
 
     # ---------- IPC 命令（白名单 + 校验 + 串行） ----------
     def dispatch(self, cmd: str, args: dict) -> dict:
+        handler = {
+            "status": self._cmd_status,
+            "get_config": self._cmd_get_config,
+            "mount": self._cmd_mount,
+            "unmount": self._cmd_unmount,
+            "open_finder": self._cmd_open_finder,
+            "refresh": self._cmd_refresh,
+            "set_config": self._cmd_set_config,
+            "stop": self._cmd_stop,
+        }.get(cmd)
+        if handler is None:
+            raise ValueError(f"unknown command: {cmd}")
+        # 只读命令不持写锁，避免被慢写命令（NetFS 挂载）阻塞；写命令仍串行。
+        if cmd in READONLY_CMDS:
+            return handler(args)
         with self._command_lock:
-            handler = {
-                "status": self._cmd_status,
-                "get_config": self._cmd_get_config,
-                "mount": self._cmd_mount,
-                "unmount": self._cmd_unmount,
-                "open_finder": self._cmd_open_finder,
-                "refresh": self._cmd_refresh,
-                "set_config": self._cmd_set_config,
-                "stop": self._cmd_stop,
-            }.get(cmd)
-            if handler is None:
-                raise ValueError(f"unknown command: {cmd}")
             return handler(args)
 
     def _cmd_status(self, args):
@@ -497,7 +502,10 @@ class ResidentService:
         if not (view.connected and view.webdav_port
                 and view.username and view.password):
             raise ValueError("连接或凭证不可用，无法挂载")
-        self._start_proxy()
+        # 代理未启动（端口被占/启动失败）时拒绝进入 NetFS 挂载，
+        # 避免把 NAS 凭证发往非自有 127.0.0.1 监听者。
+        if not self._start_proxy():
+            raise ValueError("本地代理未启动，拒绝挂载以避免凭证发往非自有端口")
         self._publish(view)
         ok, msg = self.mount.mount(MOUNT_URL, self._expected_mountpoint(),
                                    view.username, view.password)
