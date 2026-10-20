@@ -198,7 +198,10 @@ UP.snapshot() -> dict  # 含 generation/host/port/username/password/base/connect
 - 发送前（建连/发送阶段）失败：可重试一次，重试前 `load_snapshot()` 取最新目标，重建 URL/Basic/TLS/连接。
 - 发送后不确定：安全方法（GET/HEAD/OPTIONS/PROPFIND）可重试；不安全方法（PUT/DELETE/MOVE/COPY/MKCOL/PROPPATCH/LOCK/UNLOCK）不重放，抛 `UnknownCommitError` → `502` 诊断"上游可能已处理，请勿自动重发"。
 - 保守说明：不安全方法不区分 connect/send 阶段，任意传输失败都按"提交不确定"处理（宁可客户端显式复查，不冒双写风险）。
-- TLS 失败经 `TlsLockout` 闭锁：冷却期内直接快速失败并返回分类诊断，不反复握手。
+- TLS 失败（包括底层原生 `ssl.SSLError` / `SSLCertVerificationError`）先经 `classify_error` 转成
+  `TlsVerifyError`/`TlsHandshakeError` 并计入 `TlsLockout`；冷却期内直接快速失败，不反复握手。
+- 上游 request-target 必须拆分 path/query：只 percent-encode path，并保留原始 query 分隔符与已编码序列；
+  首次请求与安全方法重试使用同一构造函数。
 
 ### 4.7 CLI（凭证不进 argv）
 

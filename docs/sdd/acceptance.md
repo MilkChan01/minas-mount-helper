@@ -37,6 +37,7 @@
 | M01–M03 | 配置覆盖/持久化/LaunchAgent 联动；launcher 双布局与 0755；断线/死挂载清理及恢复重挂 | tests/test_macos_contract_audit.py | 通过（离线契约）；LaunchAgent/NetFS 见 B 层 |
 | M04–M08 | DAV 头确认、503/401 顺序与 close、`pgrep -x`、TLS 闭锁、first-confirmed 不等慢探针 | tests/test_macos_contract_audit.py | 通过（离线契约） |
 | M09 | env server_name 真正用于 SNI；adopt 加锁；Expect 门禁；读体前并发槽；IPC reader 关闭；启动失败释放锁；代理 CLI 无凭证参数 | tests/test_macos_contract_audit.py | 通过（离线契约） |
+| M10 | 手动挂载复位卸载意图；query 保留；原生 SSL 分类闭锁；helper 超时 kill/reap；stdin 凭证保留空白 | tests/test_macos_contract_audit.py | 通过（离线契约）；Objective-C 编译与真实 NetFS 见 B 层 |
 
 ## S 层 · 常驻服务架构（FR-5 / S01–S07，Linux/loopback 自动验收）
 

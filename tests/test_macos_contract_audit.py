@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""M01–M09：无 macOS 实机时的控制面/协议契约回归。"""
+"""M01–M10：无 macOS 实机时的控制面/协议契约回归。"""
 import json
 import os
 from pathlib import Path
 import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -286,6 +287,102 @@ class MacosContractAudit(unittest.TestCase):
                 service.start()
         self.assertIsNone(service._lock_fd)
         failing.stop.assert_called_once()
+
+    def test_m10_manual_mount_resets_service_unmounted_intent_only_on_success(self):
+        mount = RecordingMount()
+        service = self._service(views=[view(True, 9001)], mount=mount)
+        service._view = view(True, 9001)
+        service._user_unmounted = True
+        service._cmd_mount({})
+        self.assertFalse(service._user_unmounted)
+
+        class FailingMount(RecordingMount):
+            def mount(self, *args):
+                return False, "fixture failure"
+
+        failed = self._service(views=[view(True, 9001)], mount=FailingMount())
+        failed._view = view(True, 9001)
+        failed._user_unmounted = True
+        with self.assertRaises(ValueError):
+            failed._cmd_mount({})
+        self.assertTrue(failed._user_unmounted)
+
+    def test_m10_query_is_preserved_on_first_attempt_and_retry(self):
+        paths = []
+        original = proxy.UP
+        proxy.UP = proxy.Upstream()
+        proxy.UP.host = "127.0.0.1"
+        proxy.UP.port = 9443
+        proxy.UP.base = "/pool0/data"
+        proxy.UP.username = "u"
+        proxy.UP.password = "p"
+        proxy.UP.tls = state_store.TlsTarget(server_name="nas.test")
+        try:
+            calls = [ConnectionResetError("retry"), (200, {}, b"ok")]
+
+            def capture(_up, _method, full, _headers, _body):
+                paths.append(full)
+                outcome = calls.pop(0)
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return outcome
+
+            snap = state_store.TargetSnapshot(
+                host="127.0.0.1", port=9443, base="/pool0/data",
+                username="u", password="p",
+                tls=state_store.TlsTarget(server_name="nas.test"))
+            with patch.object(proxy, "_send_once", side_effect=capture), \
+                 patch.object(proxy, "_reload_snapshot", return_value=snap):
+                proxy._send_upstream("GET", "/folder name/file?x=1&name=a%20b", {}, None)
+        finally:
+            proxy.UP = original
+        self.assertEqual(paths, [
+            "/pool0/data/folder%20name/file?x=1&name=a%20b",
+            "/pool0/data/folder%20name/file?x=1&name=a%20b",
+        ])
+
+    def test_m10_native_ssl_error_is_classified_and_records_lockout(self):
+        original = proxy.UP
+        proxy.UP = proxy.Upstream()
+        proxy.UP.host = "127.0.0.1"
+        proxy.UP.port = 9443
+        proxy.UP.base = "/pool0/data"
+        proxy.UP.username = "u"
+        proxy.UP.password = "p"
+        proxy.UP.tls = state_store.TlsTarget(server_name="nas.test")
+        try:
+            err = ssl.SSLCertVerificationError(1, "certificate verify failed")
+            with patch.object(proxy, "_send_once", side_effect=err):
+                with self.assertRaises(tls_transport.TlsVerifyError):
+                    proxy._send_upstream("GET", "/", {}, None)
+            status = proxy.UP.lockout.status()
+            self.assertEqual(status["attempts"], 1)
+            self.assertEqual(status["reason_class"], "verify")
+        finally:
+            proxy.UP = original
+
+    def test_m10_netfs_timeout_kills_and_reaps_child(self):
+        core = ac.AppCore({"mount_dir": ""})
+        proc = Mock()
+        proc.communicate.side_effect = [
+            subprocess.TimeoutExpired("netfs_mount", 40),
+            (b"", b"killed"),
+        ]
+        with patch.object(core, "is_mounted", return_value=False), \
+             patch.object(core, "_helper_supported", return_value=True), \
+             patch.object(ac.subprocess, "Popen", return_value=proc):
+            ok, message = core.mount_with_credentials(
+                "http://127.0.0.1:18445/", "/Volumes/127.0.0.1", "u", "p")
+        self.assertFalse(ok)
+        proc.kill.assert_called_once()
+        self.assertEqual(proc.communicate.call_count, 2)
+        self.assertIn("超时", message)
+
+    def test_m10_netfs_stdin_parser_preserves_credential_spaces(self):
+        source = (MOUNTAPP / "netfs_mount.m").read_text()
+        self.assertNotIn("whitespaceCharacterSet", source)
+        self.assertIn("componentsSeparatedByString:@\"\\n\"", source)
+        self.assertIn("hasSuffix:@\"\\r\"", source)
 
     def test_m08_first_confirmed_does_not_wait_for_slow_loser(self):
         slow_release = threading.Event()

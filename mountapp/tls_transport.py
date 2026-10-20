@@ -98,7 +98,8 @@ def classify_error(exc: BaseException) -> TlsError:
     if isinstance(exc, TlsError):
         return exc
     if isinstance(exc, ssl.SSLCertVerificationError):
-        return TlsVerifyError(f"服务端证书校验失败：{exc.verify_message or exc}")
+        detail = getattr(exc, "verify_message", None) or str(exc)
+        return TlsVerifyError(f"服务端证书校验失败：{detail}")
     if isinstance(exc, ssl.SSLError):
         msg = str(exc)
         low = msg.lower()

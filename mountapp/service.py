@@ -503,6 +503,7 @@ class ResidentService:
                                    view.username, view.password)
         if not ok:
             raise ValueError(msg or "挂载失败")
+        self._user_unmounted = False
         self._refresh_mount_state()
         return {"mounted": self._mounted, "mount_path": self._mount_path}
 

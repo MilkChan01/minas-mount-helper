@@ -29,7 +29,8 @@ runtime owner 独占：`mountapp/app_core.py`、`mountapp/conn_manager.py`、`mo
 | M03 | `ResidentService._mount_health` | 连续断线/死挂载清理并恢复，显式用户卸载不自动挂回 |
 | M04/M06/M08 | discovery | 200/207 仍须 DAV 头；`pgrep -x sso_login`；first-confirmed 不等待慢输家 |
 | M05/M09 | HTTP/IPC/lifecycle | 拒绝路径 close_connection；Expect 前置门禁；读体前并发门禁；IPC reader 关闭；启动失败释放 socket/flock |
-| M07/M09 | proxy/TLS/state | TLS lockout 快速失败；解析后 server_name 用于 SNI；adopt 锁内原子化；代理 CLI 无凭证参数 |
+| M07/M09/M10 | proxy/TLS/state | TLS lockout 快速失败；原生 SSL 分类后计入闭锁；解析后 server_name 用于 SNI；adopt 锁内原子化；query 与 path 分离；代理 CLI 无凭证参数 |
+| M10 | mount/netfs | 手动挂载成功复位用户卸载意图；helper 超时 kill+reap；stdin 仅移除行分隔符并保留凭证空白 |
 | SR-3 | `conn_manager._VerifiedConn`/`load_tls_config` | CERT_REQUIRED+check_hostname=True；server_name 仅显式配置；无 verify=false 降级 |
 | SR-4 | `netfs_mount.m` + `app_core.mount` | 凭证走 stdin、不进 argv；`MWDAV_MOUNT_PROTOCOL=2` 能力握手，旧 helper 拒绝 |
 

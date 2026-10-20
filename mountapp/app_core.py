@@ -325,6 +325,19 @@ class AppCore:
                 input=f"{username}\n{password}\n".encode(), timeout=40)
             text = (out or b"").decode("utf-8", "replace") + \
                 (err or b"").decode("utf-8", "replace")
+        except subprocess.TimeoutExpired:
+            # communicate 超时不会自动终止子进程；必须 kill 后再次 communicate 以回收，
+            # 避免 helper 在后台继续执行一次迟到的挂载。
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.communicate()
+            except Exception:
+                pass
+            self.status_text = "挂载失败: netfs_mount 超时，已终止并回收"
+            return False, "挂载超时，helper 已终止"
         except Exception as e:
             self.status_text = f"挂载失败: {e}"
             return False, str(e)

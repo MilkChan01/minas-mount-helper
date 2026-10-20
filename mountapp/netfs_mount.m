@@ -20,16 +20,16 @@ static BOOL read_credentials(NSString **outUser, NSString **outPass) {
     NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     if (!text) return NO;
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
-    NSString *user = nil, *pass = nil;
-    for (NSString *line in lines) {
-        NSString *t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (t.length == 0) continue;
-        if (user == nil) { user = t; }
-        else { pass = t; break; }
-    }
-    if (!user) return NO;
+    if (lines.count < 2) return NO;
+    // 协议只移除行分隔符。CRLF 时去掉每行末尾单个 \r；其他空白属于凭证本体。
+    NSString *(^stripCR)(NSString *) = ^NSString *(NSString *line) {
+        return [line hasSuffix:@"\r"] ? [line substringToIndex:line.length - 1] : line;
+    };
+    NSString *user = stripCR(lines[0]);
+    NSString *pass = stripCR(lines[1]);
+    if (user.length == 0) return NO;
     *outUser = user;
-    *outPass = pass ?: @"";
+    *outPass = pass;
     return YES;
 }
 

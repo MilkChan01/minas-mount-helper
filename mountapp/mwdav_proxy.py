@@ -317,6 +317,15 @@ def _send_once(up: dict, method: str, full: str, headers: dict, body):
     return resp.status, dict(resp.getheaders()), data
 
 
+def _build_upstream_path(base: str, request_target: str) -> str:
+    """仅编码 URI path，保留 query 分隔符和已编码序列；fragment 不应出现在 HTTP request-target。"""
+    parts = urllib.parse.urlsplit(request_target)
+    raw_path = parts.path if parts.path.startswith("/") else "/" + parts.path
+    full = base.rstrip("/") + raw_path
+    quoted = urllib.parse.quote(full, safe="/:%@!$&'()*+,;=-._~[]%")
+    return quoted + (("?" + parts.query) if parts.query else "")
+
+
 def _send_upstream(method, path, headers, body):
     """转发；安全方法连接级失败可在重读最新快照后重试一次；
     不安全方法不确定提交结果直接抛 UnknownCommitError，绝不盲重放。"""
@@ -326,8 +335,7 @@ def _send_upstream(method, path, headers, body):
             "TLS 暂时闭锁（%.1fs 后重试）：%s" % (
                 status["retry_after"], status["last_diagnostic"] or "连续握手失败"))
     up = UP.snapshot()
-    full = up["base"] + (path if path.startswith("/") else "/" + path)
-    full = urllib.parse.quote(full, safe="/:%@!$&'()*+,;=-._~[]%")
+    full = _build_upstream_path(up["base"], path)
     out_headers = _build_out_headers(up, headers)
 
     dest_key = next((k for k in out_headers if k.lower() == "destination"), None)
@@ -342,10 +350,16 @@ def _send_upstream(method, path, headers, body):
             return _send_once(up, method, full, out_headers, body)
         except UnknownCommitError:
             raise
-        except TlsError:
-            UP.lockout.record_failure(sys.exc_info()[1])
+        except TlsError as e:
+            UP.lockout.record_failure(e)
             _close_tl_conn()
             raise
+        except ssl.SSLError as e:
+            # wrap_socket/http.client 抛原生 SSL 异常；统一分类后再进入闭锁，
+            # 防止证书校验失败落入通用网络重试而绕过安全策略。
+            err = UP.lockout.record_failure(e)
+            _close_tl_conn()
+            raise err from e
         except ResponseTooLarge:
             _close_tl_conn()
             raise
@@ -362,8 +376,7 @@ def _send_upstream(method, path, headers, body):
             if snap is not None:
                 UP.adopt(snap)
                 up = UP.snapshot()
-                full = up["base"] + (path if path.startswith("/") else "/" + path)
-                full = urllib.parse.quote(full, safe="/:%@!$&'()*+,;=-._~[]%")
+                full = _build_upstream_path(up["base"], path)
                 out_headers = _build_out_headers(up, headers)
                 dk = next((k for k in out_headers if k.lower() == "destination"), None)
                 if dk:

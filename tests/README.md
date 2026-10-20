@@ -31,7 +31,7 @@ pytest
 |---|---|---|
 | `security/` | 探针默认拒绝、无硬编码凭证、TLS 策略文档冻结、用户文档诚实宣称 | T11、文档守卫 |
 | 根级 `test_proxy_unit.py` / `test_state.py` / `test_tls.py` | 数据面契约、读零写、TLS 策略 | T01–T06、T11–T14、D02、D04 |
-| 根级 `test_macos_contract_audit.py` | macOS 命令、LaunchAgent、DAV/HTTP/TLS/IPC/生命周期文档契约反证 | M01–M09 |
+| 根级 `test_macos_contract_audit.py` | macOS 命令、LaunchAgent、DAV/HTTP/TLS/IPC/NetFS/生命周期文档契约反证 | M01–M10 |
 | `runtime/` | 挂载身份、状态复位、GUI 刷新、慢路径 SNI、`lsof` PID/监听端口 AND 选择 | T07、T08、T09、T10、D07、D08、P2-5 |
 | `dynamic/` | 发现分层认证、快路径发布 | D05、D06、D07 |
 | `test_acceptance_*` | 独立静态/回环验收（评审者维护） | 全编号交叉复核 |
