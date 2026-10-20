@@ -78,6 +78,8 @@ Finder / NetFS ── 本地回环 ──▶ 内嵌 proxy ── HTTPS(SR-3) ─
 - 数据面启动/每请求读取不可变快照；连接池按 `(host,port,generation)` 分桶。
 
 ### 3.2 探测结果（conn_manager → AppCore）
+- 端口枚举先用 `lsof -a` 将 `sso_login` PID、TCP socket 与 LISTEN 状态做交集；禁止用 lsof
+  默认的 OR 选择语义把其他 App 监听端口加入候选（D08）。
 - 每个候选端口返回分层结果 `{phase: connect|tls|http|dav, http_status, dav_capable,
   client_cert_loaded, error_type}`，401/mTLS/非 DAV 分别标注为"候选需认证/条件性"，
   不得统一折叠为 False（修 D05、D06）。

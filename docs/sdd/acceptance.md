@@ -33,6 +33,7 @@
 | D05 | mTLS 条件场景：匿名先探，mtls_required/模糊 EOF 且已配证书自动带证书升级一次，不折叠 False | tests/dynamic/test_discovery_auth_layers.py | 通过（client 18 项连续通过） |
 | D06 | 401 认证失败与 TLS 失败区分，401 单列 auth_required 候选并重试 | tests/dynamic/test_discovery_auth_layers.py | 通过（client 18 项连续通过） |
 | D07 | 快路径成功即发布目标，慢存储查询不阻塞；慢路径 SNI=server_name | tests/dynamic/test_fast_path_publish.py；tests/runtime/test_pool_sni.py | 通过（client 18 项连续通过） |
+| D08 | `lsof` 端口发现必须把 PID、TCP、LISTEN 作为 AND 条件，不得混入系统其他 App 监听端口 | tests/runtime/test_tunnel_port_selection.py | 通过（命令契约 + 混合输出 fixture）；macOS 复核见 B-2 |
 
 ## S 层 · 常驻服务架构（FR-5 / S01–S07，Linux/loopback 自动验收）
 

@@ -24,6 +24,7 @@ runtime owner 独占：`mountapp/app_core.py`、`mountapp/conn_manager.py`、`mo
 | D05 | `conn_manager._probe_once(present_cert=)`/`probe_webdav` | 匿名剥离证书先探；明确 mtls_required 或模糊 EOF 且已配证书→自动带证书升级；`verify_failed` 不换证书掩盖；未配证书 fail-closed |
 | D06 | `conn_manager.probe_webdav` | 401 Basic 单列 `auth_required` 候选，带凭证重试转 confirmed，不丢弃 |
 | D07 | `conn_manager.poll_storage` + 服务快慢分离 | 快路径确认即发布；慢存储独立低优先级、失败非致命、不阻塞发布 |
+| D08 | `conn_manager.find_tunnel_ports` | `lsof` 以 `-a` 将目标 PID、TCP 与 LISTEN 条件做 AND；候选仅来自 `sso_login`，不得混入系统其他 App 监听端口 |
 | SR-3 | `conn_manager._VerifiedConn`/`load_tls_config` | CERT_REQUIRED+check_hostname=True；server_name 仅显式配置；无 verify=false 降级 |
 | SR-4 | `netfs_mount.m` + `app_core.mount` | 凭证走 stdin、不进 argv；`MWDAV_MOUNT_PROTOCOL=2` 能力握手，旧 helper 拒绝 |
 

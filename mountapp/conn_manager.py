@@ -288,7 +288,7 @@ def find_cert_files():
 def _proxy_alive():
     try:
         r = subprocess.run(
-            ["lsof", "-nP", "-iTCP:%d" % PROXY_PORT, "-sTCP:LISTEN"],
+            ["lsof", "-nP", "-a", "-iTCP:%d" % PROXY_PORT, "-sTCP:LISTEN"],
             capture_output=True, text=True, timeout=4)
         return bool((r.stdout or "").strip())
     except Exception:
@@ -318,7 +318,9 @@ def find_sso_login_pid():
 
 
 def find_tunnel_ports(pid):
-    out = _run(["lsof", "-nP", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"])
+    # lsof 的多类选择条件默认按 OR 组合；必须用 -a 将目标 PID、TCP socket
+    # 与 LISTEN 状态取交集，否则会把系统其他 App 的监听端口混入候选集。
+    out = _run(["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"])
     ports = set()
     for line in out.splitlines()[1:]:
         parts = line.split()

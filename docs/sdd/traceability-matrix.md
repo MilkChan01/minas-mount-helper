@@ -2,7 +2,8 @@
 
 - 基线：`d25c2516a17a28321df9cdaf4dd7c82662af3d3a`
 - 缺陷编号固定为离线验证 14 项（T01–T14，源自 `架构评审/离线特征验证.py`）；
-  动态端口 7 场景编号 D01–D07（源自 `动态端口定位/动态端口复现测试.py`）。
+  动态端口原 7 场景编号 D01–D07（源自 `动态端口定位/动态端口复现测试.py`），
+  PR #2 macOS 实测追加端口选择回归 D08。
 - 状态取值：`基线复现`（已在基线复现、未修）/ `修复中` / `已关闭` / `已关闭`。
 - 分组：**数据面** = 本地回环代理（mwdav_proxy.py / state_store.py / tls_transport.py）；
   **控制面** = 发现/发布/挂载/界面（main.py / app_core.py / conn_manager.py）；
@@ -47,6 +48,7 @@
 | D05 | 要求 mTLS 的端点：原探测 False；带夹具客户端证书 OPTIONS 200；服务端 `PEER_DID_NOT_RETURN_A_CERTIFICATE`（条件性，NAS 真实策略未知） | `probe_webdav` 不带客户端证书，401/TLS/非 DAV 统一折叠 False | SR-3、FR-1（分层结果） | 控制面 | `tests/dynamic/test_discovery_auth_layers.py`（匿名剥离证书先探；mtls_required/模糊 EOF 且已配证书→自动带证书升级一次；verify_failed 不换证书掩盖；未配证书 fail-closed） | A（真实设备 mTLS 策略见 B 层） | 已关闭 |
 | D06 | 匿名 OPTIONS 401 被识别为失败；携带认证后 200（HTTP 认证失败 ≠ TLS 失败） | HTTPError 全折叠为 False | SR-3、FR-1 | 控制面 | `tests/dynamic/test_discovery_auth_layers.py`（401 Basic 挑战单列 auth_required 候选，带凭证重试转 confirmed，不丢弃） | A | 已关闭 |
 | D07 | 阻塞的可选 pool 查询期间已识别新端口但不发布，释放后才更新 | 慢路径存储统计在快路径发布之前同步执行；AppCore 等 refresh 返回才发布 | FR-1.2 | 控制面 | `tests/dynamic/test_fast_path_publish.py`（快路径成功即发布，不被慢查询阻塞）；`tests/runtime/test_pool_sni.py`（慢路径 SNI/主机名=server_name，不用 127.0.0.1 冒充） | A | 已关闭 |
+| D08 | macOS 实测 NAS 显示离线；端口发现把系统其他 App 的监听端口一并纳入候选，真实隧道端口被大量无关探测淹没 | `lsof -p PID -iTCP -sTCP:LISTEN` 缺少 `-a`；lsof 默认对选择条件做 OR 而非 AND | FR-1.1 | 控制面 | `tests/runtime/test_tunnel_port_selection.py`（命令必须含 `-a`，且位于 PID 与网络/状态选择之前；fixture 输出只解析目标 PID 列） | A（macOS 实测复核仍见 B-2） | 已关闭 |
 
 > 冻结事实：入站恒为 require/fail-closed（缺/错凭证 401、未配齐 503），**无 optional 匿名开关**；
 > NetFS 不送凭证属兼容性失败，登记 B-7，不用匿名绕过。

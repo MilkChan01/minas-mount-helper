@@ -174,7 +174,7 @@ class AppCore:
     @staticmethod
     def _proxy_pid_on(port):
         try:
-            r = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"],
+            r = subprocess.run(["lsof", "-nP", "-a", "-iTCP:%d" % port, "-sTCP:LISTEN"],
                                capture_output=True, text=True, timeout=5)
             for line in (r.stdout or "").splitlines()[1:]:
                 parts = line.split()
