@@ -25,6 +25,11 @@ runtime owner 独占：`mountapp/app_core.py`、`mountapp/conn_manager.py`、`mo
 | D06 | `conn_manager.probe_webdav` | 401 Basic 单列 `auth_required` 候选，带凭证重试转 confirmed，不丢弃 |
 | D07 | `conn_manager.poll_storage` + 服务快慢分离 | 快路径确认即发布；慢存储独立低优先级、失败非致命、不阻塞发布 |
 | D08 | `conn_manager.find_tunnel_ports` | `lsof` 以 `-a` 将目标 PID、TCP 与 LISTEN 条件做 AND；候选仅来自 `sso_login`，不得混入系统其他 App 监听端口 |
+| M01/M02 | 配置/launcher | 服务加载并原子持久化配置；`get_config` 独立只读；源码与 app bundle 启动路径均支持；launcher 0755、Python 3.10+ 能力门禁、无宽泛 pgrep |
+| M03 | `ResidentService._mount_health` | 连续断线/死挂载清理并恢复，显式用户卸载不自动挂回 |
+| M04/M06/M08 | discovery | 200/207 仍须 DAV 头；`pgrep -x sso_login`；first-confirmed 不等待慢输家 |
+| M05/M09 | HTTP/IPC/lifecycle | 拒绝路径 close_connection；Expect 前置门禁；读体前并发门禁；IPC reader 关闭；启动失败释放 socket/flock |
+| M07/M09 | proxy/TLS/state | TLS lockout 快速失败；解析后 server_name 用于 SNI；adopt 锁内原子化；代理 CLI 无凭证参数 |
 | SR-3 | `conn_manager._VerifiedConn`/`load_tls_config` | CERT_REQUIRED+check_hostname=True；server_name 仅显式配置；无 verify=false 降级 |
 | SR-4 | `netfs_mount.m` + `app_core.mount` | 凭证走 stdin、不进 argv；`MWDAV_MOUNT_PROTOCOL=2` 能力握手，旧 helper 拒绝 |
 
@@ -84,12 +89,13 @@ runtime owner 独占：`mountapp/app_core.py`、`mountapp/conn_manager.py`、`mo
 
 | 命令 | 入参（校验后） | 行为 | 响应 data（脱敏） |
 |---|---|---|---|
-| `status` | 无 | 返回当前非敏感视图 | `connected, mode, webdav_port, mounted, mount_path, storage[{total,used}], error, service_pid`；**无 username/password** |
+| `status` | 无 | 返回当前非敏感运行视图 | `connected, mode, webdav_port, mounted, mount_path, storage[{total,used}], error, service_pid`；**无 username/password** |
+| `get_config` | 无 | 返回服务权威的非敏感用户配置 | `auto_mount, auto_start, mount_dir` |
 | `mount` | 无 | 服务内执行挂载协调（凭证仍走 stdin，不进 argv） | `mounted, mount_path` |
 | `unmount` | 无 | 服务内卸载，保留用户意图 | `mounted=false` |
 | `open_finder` | 无 | 打开已挂载点（无挂载点→错误） | `opened: bool` |
 | `refresh` | 无 | 触发一次强制发现刷新 | `connected, webdav_port` |
-| `set_config` | `auto_mount:bool, auto_start:bool, mount_dir:str?` 类型校验 | 校验后写配置；`auto_start` 走 LaunchAgent | 回显已接受配置 |
+| `set_config` | `auto_mount:bool, auto_start:bool, mount_dir:str?` 类型校验 | 原子持久化；`auto_start` 安装/卸载 LaunchAgent；失败回滚 | 回显已接受配置 |
 | `stop` | 无 | 显式安全关停服务（仅用户主动/退出 LaunchAgent） | `stopped: true` |
 
 校验规则：布尔必须为 bool；`mount_dir` 为字符串且规范化后非空才接受；未知命令/缺字段/类型错 → `ok=false`，不执行副作用。
@@ -141,6 +147,7 @@ class MountBackend(Protocol):
 
 class ResidentService:
     def __init__(self, config: dict | None = None, *,
+                 config_path: str | None = None,         # 生产缺省 config.json；测试可传 tmpdir/纯内存
                  state_path: str | None = None,          # state_store 文件；测试传 tmpdir
                  socket_dir: str | None = None,          # 0700 运行时目录；测试传 tmpdir
                  discovery: DiscoveryBackend | None = None,  # 缺省=真实 ConnManager；测试注入脚本化 fake
@@ -165,13 +172,14 @@ class ResidentService:
 - 请求：`{"cmd": str, "id": int|str, "args": {...}}`；响应：`{"ok": bool, "id": ..., "error": str|None, "data": {...}}`。
 - 服务端单 worker 队列 + 锁，命令**按到达顺序串行**；`status` 只读内存视图，不触发 refresh/publish/写。
 - 命令白名单（除此之外一律 `ok=false, error="unknown command"`，零副作用）：
-  `status` / `mount` / `unmount` / `open_finder` / `refresh` / `set_config` / `stop`。
+  `status` / `get_config` / `mount` / `unmount` / `open_finder` / `refresh` / `set_config` / `stop`。
 - **无** `publish`、无任意上游/凭证命令、无代理透传、无 RCE 面。
 
 ### 8.3 命令字段与校验
 | cmd | args（类型严格，缺/错 → ok=false 不执行） |
 |---|---|
 | `status` | 无 args |
+| `get_config` | 无 args；只返回 `auto_mount/auto_start/mount_dir` |
 | `mount` | 无 args（URL/挂载点由服务内部决定，不经客户端传入） |
 | `unmount` | 无 args |
 | `open_finder` | 无 args |
@@ -218,6 +226,8 @@ class DiscoveryView:
 ### 8.8 stop 语义
 - `stop` 命令或 SIGTERM：置停事件 → drain 在途请求（`stop_timeout`）→ join 发现/存储线程 → 停内嵌代理 →
   unlink socket、释放锁 → 退出码 0；重复 stop 幂等不报错；停止后不再发布/自愈。
+- `start()` 在获取 flock 后任一步（IPC bind、线程启动）失败，必须停止已建 IPC、unlink socket 并释放 flock 后重抛，
+  禁止留下“服务没起来但第二次启动永远报已运行”的半启动状态。
 - 超时仅 best-effort join，正常路径不用 SIGKILL；SIGTERM 处理器只在 `serve()` 注册。
 
 ### 8.9 MountBackend fake（替代真实 NetFS/mount）

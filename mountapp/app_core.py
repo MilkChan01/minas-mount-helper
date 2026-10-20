@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-应用核心（控制面编排）：发现 -> 唯一发布目标快照 -> Finder 挂载 -> 会话内自愈。
+控制面兼容模块：配置、目标发布、挂载身份与 Finder 操作。
 
-边界：
-- 目标快照唯一写者 = 本 GUI 会话（经 state_store.publish_target，expected_generation CAS）；
-  代理进程只读，健康(connected/last_error)只在内存，不落盘。
-- 只认领归属本代理回环端点的卷（T07/T08）；凭证不走 argv，NetFS 经 stdin 私有管道（SR-4）。
-- GUI 退出后无常驻进程：不再自动发现/自愈/重发布，仅保留代理已静态服务的挂载。
+最终架构由 ResidentService 作为唯一运行时所有者；AppCore 提供可注入的发现/挂载适配能力，
+不得被 GUI 作为第二个后台控制面启动。目标经 state_store.publish_target 的 CAS 发布，代理只读；
+挂载只认领本地代理 127.0.0.1:18445，凭证经 stdin；常驻服务内嵌 ProxyServer，GUI 退出后
+发现、轮换与自愈继续运行。
 """
 import base64
 import http.client
@@ -40,6 +39,45 @@ DEFAULT_CONFIG = {
     "auto_start": False,
     "mount_dir": "",
 }
+
+
+def load_app_config(path=CONFIG_PATH, override=None):
+    """读取应用配置：已保存值覆盖默认值，未知但合法的 TLS 键予以保留。"""
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict):
+            cfg.update(saved)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError):
+        pass
+    if isinstance(override, dict):
+        cfg.update(override)
+    return cfg
+
+
+def save_app_config(config, path=CONFIG_PATH):
+    """以 0600 原子保存配置；失败向调用者抛出，不能让 UI 假装已保存。"""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    tmp = path + ".tmp.%d.%d" % (os.getpid(), threading.get_ident())
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ======================= 挂载身份（纯函数，可单测） =======================
@@ -106,27 +144,10 @@ class AppCore:
 
     # ---------- 配置 ----------
     def _load_config(self, override=None):
-        cfg = dict(DEFAULT_CONFIG)
-        try:
-            os.makedirs(APP_SUPPORT, exist_ok=True)
-            if os.path.exists(CONFIG_PATH):
-                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
-                for k in DEFAULT_CONFIG:
-                    cfg.setdefault(k, saved.get(k, DEFAULT_CONFIG[k]))
-        except Exception:
-            pass
-        if isinstance(override, dict):
-            cfg.update(override)
-        return cfg
+        return load_app_config(CONFIG_PATH, override)
 
     def save_config(self):
-        try:
-            os.makedirs(APP_SUPPORT, exist_ok=True)
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        save_app_config(self.config, CONFIG_PATH)
 
     # ---------- 状态模块（延迟导入；未就绪不本地另写实现） ----------
     def _state_store(self):

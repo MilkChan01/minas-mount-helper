@@ -132,7 +132,8 @@ class Upstream:
 
     def adopt(self, snap: TargetSnapshot) -> bool:
         """纯读采纳外部已发布目标，不写盘；身份变化返回 True 并 bump generation。"""
-        return self._adopt(snap)
+        with self._lock:
+            return self._adopt(snap)
 
     def _adopt(self, snap: TargetSnapshot) -> bool:
         identity = (snap.host, snap.port, snap.username, snap.password,
@@ -254,9 +255,10 @@ def _obtain_conn(up: dict, force_new: bool = False) -> http.client.HTTPSConnecti
             and getattr(tl, "port", None) == up["port"]):
         return tl.conn
     _close_tl_conn()
+    cfg = _resolve_tls(up["tls"])
     ctx = _build_ctx(up)
     conn = _ServerNameHTTPSConnection(
-        up["host"], up["port"], UPSTREAM_TIMEOUT, ctx, up["tls"].server_name)
+        up["host"], up["port"], UPSTREAM_TIMEOUT, ctx, cfg.server_name)
     tl.conn, tl.gen, tl.host, tl.port = conn, up["generation"], up["host"], up["port"]
     return conn
 
@@ -266,7 +268,9 @@ def _connection_pool_reset():
     _close_tl_conn()
 
 
-# ---------- 上游并发限制 ----------
+# 同时限制“进入请求处理并可能读取请求体”的数量，以及实际上游并发。
+# 前者必须在读取请求体前获取，防止大量 200MiB 请求先堆入内存再排队等上游槽位。
+_request_semaphore = threading.Semaphore(MAX_CONCURRENT_UPSTREAM)
 _upstream_semaphore = threading.Semaphore(MAX_CONCURRENT_UPSTREAM)
 
 
@@ -316,6 +320,11 @@ def _send_once(up: dict, method: str, full: str, headers: dict, body):
 def _send_upstream(method, path, headers, body):
     """转发；安全方法连接级失败可在重读最新快照后重试一次；
     不安全方法不确定提交结果直接抛 UnknownCommitError，绝不盲重放。"""
+    if UP.lockout.locked():
+        status = UP.lockout.status()
+        raise TlsHandshakeError(
+            "TLS 暂时闭锁（%.1fs 后重试）：%s" % (
+                status["retry_after"], status["last_diagnostic"] or "连续握手失败"))
     up = UP.snapshot()
     full = up["base"] + (path if path.startswith("/") else "/" + path)
     full = urllib.parse.quote(full, safe="/:%@!$&'()*+,;=-._~[]%")
@@ -490,6 +499,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if close:
             self.send_header("Connection", "close")
+            self.close_connection = True
         for k, v in (extra_headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -524,6 +534,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
         u, _, p = dec.partition(":")
         return hmac.compare_digest(u, up["username"]) and hmac.compare_digest(p, up["password"])
 
+    def handle_expect_100(self):
+        """在发送 100 Continue 前执行可判定门禁，避免鼓励未认证/超限客户端发送大体。"""
+        up = UP.snapshot()
+        if not (up["port"] and up["username"] and up["password"]):
+            self._send_simple(503, "代理目标尚未配置：等待上游 WebDAV 目标发布。".encode(),
+                              close=True)
+            return False
+        if not self._authorized():
+            self._send_simple(401, b"Unauthorized",
+                              extra_headers={"WWW-Authenticate": 'Basic realm="MiNAS"'},
+                              close=True)
+            return False
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te and self.command in WRITE_METHODS:
+            self._send_simple(501, "暂不支持 chunked 上传，请使用 Content-Length。".encode(),
+                              close=True)
+            return False
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = -1
+        if length < 0:
+            self._send_simple(400, "非法 Content-Length。".encode(), close=True)
+            return False
+        if length > MAX_REQUEST_BODY:
+            self._send_simple(413, "请求体超过上限，已拒绝且未转发上游。".encode(),
+                              close=True)
+            return False
+        return super().handle_expect_100()
+
     def _handle(self):
         # 1. 纯读采纳最新目标（零写副作用，代理自身不发布）
         snap = _reload_snapshot()
@@ -531,16 +571,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _connection_pool_reset()
         up = UP.snapshot()
 
-        # 2. 入站认证：缺失/不匹配 → 401 挑战
+        # 2. 目标未配齐 → 503。未配置时不存在可用于比较的入站凭证，
+        # 必须先报告配置未就绪，而不是把所有请求误报成认证失败。
+        if not (up["port"] and up["username"] and up["password"]):
+            self._send_simple(503, "代理目标尚未配置：等待上游 WebDAV 目标发布。".encode(),
+                              close=True)
+            return
+
+        # 3. 入站认证：缺失/不匹配 → 401 挑战
         if not self._authorized():
             self._send_simple(
                 401, b"Unauthorized",
                 extra_headers={"WWW-Authenticate": 'Basic realm="MiNAS"'})
-            return
-
-        # 3. 目标未配齐 → 503，不转发
-        if not (up["port"] and up["username"] and up["password"]):
-            self._send_simple(503, "代理目标尚未配置：等待上游 WebDAV 目标发布。".encode())
             return
 
         # 4. Finder 元数据快速 404
@@ -665,19 +707,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD" and data:
             self.wfile.write(data)
 
-    do_GET = _handle
-    do_HEAD = _handle
-    do_POST = _handle
-    do_PUT = _handle
-    do_DELETE = _handle
-    do_MKCOL = _handle
-    do_COPY = _handle
-    do_MOVE = _handle
-    do_PROPFIND = _handle
-    do_PROPPATCH = _handle
-    do_LOCK = _handle
-    do_UNLOCK = _handle
-    do_OPTIONS = _handle
+    def _handle_guarded(self):
+        _request_semaphore.acquire()
+        try:
+            return self._handle()
+        finally:
+            _request_semaphore.release()
+
+    do_GET = _handle_guarded
+    do_HEAD = _handle_guarded
+    do_POST = _handle_guarded
+    do_PUT = _handle_guarded
+    do_DELETE = _handle_guarded
+    do_MKCOL = _handle_guarded
+    do_COPY = _handle_guarded
+    do_MOVE = _handle_guarded
+    do_PROPFIND = _handle_guarded
+    do_PROPPATCH = _handle_guarded
+    do_LOCK = _handle_guarded
+    do_UNLOCK = _handle_guarded
+    do_OPTIONS = _handle_guarded
 
 
 class ProxyServer:
@@ -772,11 +821,9 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=DEFAULT_LISTEN_PORT)
-    ap.add_argument("--upstream", type=int, default=DEFAULT_UPSTREAM_PORT)
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--base", default=UPSTREAM_BASE)
-    ap.add_argument("--username", default="")
-    ap.add_argument("--password", default="")
+    ap.add_argument("--upstream", type=int, default=None)
+    ap.add_argument("--host", default=None)
+    ap.add_argument("--base", default=None)
     ap.add_argument("--ca", default=None)
     ap.add_argument("--cert", default=None)
     ap.add_argument("--key", default=None)
@@ -787,13 +834,28 @@ if __name__ == "__main__":
 
     MAX_REQUEST_BODY = args.max_request_bytes
     MAX_RESPONSE_BODY = args.max_response_bytes
-    tls = TlsTarget(ca_file=args.ca, cert_file=args.cert, key_file=args.key,
-                    server_name=args.server_name)
-    UP.update(port=args.upstream, username=args.username or None,
-              password=args.password or None, host=args.host, base=args.base, tls=tls)
+    snap = load_snapshot(STATE_FILE)
+    if snap is None:
+        ap.error("目标状态尚未发布；独立代理必须从受保护状态文件读取凭证")
+    UP.adopt(snap)
+    # CLI 只有显式传入时才覆盖非敏感位置/TLS；凭证只来自 0600 状态文件。
+    if any(v is not None for v in (args.host, args.upstream, args.base,
+                                    args.ca, args.cert, args.key, args.server_name)):
+        tls = TlsTarget(
+            ca_file=args.ca or snap.tls.ca_file,
+            cert_file=args.cert or snap.tls.cert_file,
+            key_file=args.key or snap.tls.key_file,
+            server_name=args.server_name or snap.tls.server_name)
+        UP.adopt(TargetSnapshot(
+            generation=snap.generation, published_at=snap.published_at,
+            host=args.host or snap.host,
+            port=args.upstream if args.upstream is not None else snap.port,
+            base=args.base or snap.base,
+            username=snap.username, password=snap.password, tls=tls))
+    effective = UP.snapshot()
     srv = ProxyServer(args.port)
     srv.start()
-    print(f"代理已启动(硬化版): http://127.0.0.1:{args.port} -> https://{args.host}:{args.upstream}{args.base}")
+    print(f"代理已启动(硬化版): http://127.0.0.1:{args.port} -> https://{effective['host']}:{effective['port']}{effective['base']}")
     try:
         while True:
             time.sleep(3600)

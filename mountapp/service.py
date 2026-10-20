@@ -18,6 +18,7 @@ import threading
 import time
 
 import conn_manager as cm
+import app_core as ac
 
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 18445
@@ -103,6 +104,9 @@ class SystemMount:
     def own_mountpoint(self, expected):
         return self.core.find_mount_path()
 
+    def alive(self, expected):
+        return self.core.mount_point_alive()
+
     def open_finder(self):
         return self.core.open_in_finder()
 
@@ -111,16 +115,32 @@ class SystemMount:
 
 class ResidentService:
     def __init__(self, config: dict | None = None, *,
+                 config_path: str | None = None,
                  state_path: str | None = None,
                  socket_dir: str | None = None,
                  discovery=None,
                  mount_registry=None,
                  proxy_factory=None,
                  adopt_target=None,
+                 auto_start_setter=None,
                  proxy_port: int = PROXY_PORT,
                  stop_timeout: float = 5.0,
                  interval: float = DEFAULT_INTERVAL):
-        self.config = dict(config or {})
+        # 生产无参启动读取真实配置；测试注入 config 且不传 config_path 时保持纯内存，
+        # 避免离线测试读写用户目录或操作真实 LaunchAgent。
+        self.config_path = (config_path if config_path is not None
+                            else (ac.CONFIG_PATH if config is None else None))
+        if self.config_path is not None:
+            self.config = ac.load_app_config(self.config_path, config)
+        else:
+            self.config = dict(ac.DEFAULT_CONFIG)
+            self.config.update(config or {})
+        if auto_start_setter is not None:
+            self._auto_start_setter = auto_start_setter
+        elif self.config_path is not None:
+            self._auto_start_setter = self._default_auto_start_setter
+        else:
+            self._auto_start_setter = lambda _enabled: None
         self.proxy_port = proxy_port
         self.stop_timeout = stop_timeout
         self.interval = interval
@@ -187,11 +207,29 @@ class ResidentService:
         return mwdav_proxy.UP.adopt(snap)
 
     def _default_mount(self) -> SystemMount:
-        import app_core as ac
         core = ac.AppCore(self.config)
         core.tls = self.tls
         core.conn.exclude_port = self.proxy_port
         return SystemMount(core)
+
+    @staticmethod
+    def _launcher_path():
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.sh")
+
+    @staticmethod
+    def _agent_dir():
+        return os.path.expanduser("~/Library/LaunchAgents")
+
+    def _default_auto_start_setter(self, enabled):
+        import launch_agent
+        if enabled:
+            launch_agent.install(self._launcher_path(), self._agent_dir())
+        else:
+            launch_agent.uninstall(self._agent_dir())
+
+    def _save_config(self):
+        if self.config_path is not None:
+            ac.save_app_config(self.config, self.config_path)
 
     # ---------- 单实例锁 ----------
     def _acquire_lock(self):
@@ -294,19 +332,41 @@ class ResidentService:
 
     def _mount_health(self, view: DiscoveryView):
         self._refresh_mount_state()
+        if not view.connected:
+            self._stale_streak = 0
+            self._dead_streak += 1
+            if self._mounted and self._dead_streak >= 2:
+                # 系统自愈卸载不能覆盖用户意图；仅显式 IPC unmount 才设置 _user_unmounted。
+                self.mount.unmount(self._expected_mountpoint())
+                self._refresh_mount_state()
+                self._dead_streak = 0
+            return
+        self._dead_streak = 0
         if not self._proxy_is_running():
             return
         if not self._mounted:
             self._stale_streak = 0
             if (self.config.get("auto_mount", True) and not self._user_unmounted
-                    and view.connected and view.webdav_port
-                    and view.username and view.password):
+                    and view.webdav_port and view.username and view.password):
                 self.mount.mount(MOUNT_URL, self._expected_mountpoint(),
                                   view.username, view.password)
                 self._refresh_mount_state()
             return
-        # 已挂载：轻量存活由代理请求维持；连续失活由上层发现循环驱动清理
-        self._stale_streak = 0
+        alive = getattr(self.mount, "alive", lambda _expected: True)(
+            self._expected_mountpoint())
+        if not alive:
+            self._stale_streak += 1
+            if self._stale_streak >= 2:
+                self.mount.unmount(self._expected_mountpoint())
+                self._refresh_mount_state()
+                if (self.config.get("auto_mount", True) and not self._user_unmounted
+                        and view.webdav_port and view.username and view.password):
+                    self.mount.mount(MOUNT_URL, self._expected_mountpoint(),
+                                      view.username, view.password)
+                    self._refresh_mount_state()
+                self._stale_streak = 0
+        else:
+            self._stale_streak = 0
 
     # ---------- 后台循环 ----------
     def _loop(self):
@@ -317,10 +377,7 @@ class ResidentService:
                 if view.connected and view.webdav_port:
                     self._start_proxy()
                     self._publish(view)
-                    self._mount_health(view)
-                else:
-                    self._dead_streak += 1
-                    self._stale_streak = 0
+                self._mount_health(view)
             except Exception as e:
                 self._view = dataclasses.replace(
                     self._view, error=f"后台错误: {type(e).__name__}: {e}")
@@ -339,15 +396,25 @@ class ResidentService:
     # ---------- 生命周期 ----------
     def start(self):
         self._acquire_lock()
-        if self._ipc is None:
-            from ipc import IpcServer
-            self._ipc = IpcServer(self.socket_path, self.dispatch)
-            self._ipc.start()
-        self._stop.clear()
-        self._loop_thread = threading.Thread(target=self._loop, daemon=True)
-        self._loop_thread.start()
-        self._storage_thread = threading.Thread(target=self._storage_loop, daemon=True)
-        self._storage_thread.start()
+        try:
+            if self._ipc is None:
+                from ipc import IpcServer
+                self._ipc = IpcServer(self.socket_path, self.dispatch)
+                self._ipc.start()
+            self._stop.clear()
+            self._loop_thread = threading.Thread(target=self._loop, daemon=True)
+            self._loop_thread.start()
+            self._storage_thread = threading.Thread(target=self._storage_loop, daemon=True)
+            self._storage_thread.start()
+        except Exception:
+            if self._ipc is not None:
+                try:
+                    self._ipc.stop()
+                except Exception:
+                    pass
+                self._ipc = None
+            self._release_lock()
+            raise
 
     def serve(self) -> int:
         signal.signal(signal.SIGTERM, lambda *_: self.stop())
@@ -395,11 +462,19 @@ class ResidentService:
             "generation": self._generation or 0,
         }
 
+    def config_view(self) -> dict:
+        return {
+            "auto_mount": bool(self.config.get("auto_mount", True)),
+            "auto_start": bool(self.config.get("auto_start", False)),
+            "mount_dir": self.config.get("mount_dir", ""),
+        }
+
     # ---------- IPC 命令（白名单 + 校验 + 串行） ----------
     def dispatch(self, cmd: str, args: dict) -> dict:
         with self._command_lock:
             handler = {
                 "status": self._cmd_status,
+                "get_config": self._cmd_get_config,
                 "mount": self._cmd_mount,
                 "unmount": self._cmd_unmount,
                 "open_finder": self._cmd_open_finder,
@@ -413,6 +488,9 @@ class ResidentService:
 
     def _cmd_status(self, args):
         return self.status_view()
+
+    def _cmd_get_config(self, args):
+        return self.config_view()
 
     def _cmd_mount(self, args):
         view = self._view
@@ -470,13 +548,36 @@ class ResidentService:
             if ".." in raw_parts or not norm.startswith("/Volumes"):
                 raise ValueError("mount_dir 须为 /Volumes 下的归一化绝对路径，拒绝逃逸")
             pending_mount_dir = norm
-        # 全部校验通过后才落配置
+        pending = dict(self.config)
         if "auto_mount" in args:
-            self.config["auto_mount"] = args["auto_mount"]
+            pending["auto_mount"] = args["auto_mount"]
         if "auto_start" in args:
-            self.config["auto_start"] = args["auto_start"]
+            pending["auto_start"] = args["auto_start"]
         if "mount_dir" in args:
-            self.config["mount_dir"] = pending_mount_dir
+            pending["mount_dir"] = pending_mount_dir
+
+        old = dict(self.config)
+        self.config = pending
+        try:
+            self._save_config()
+            if "auto_start" in args and old.get("auto_start", False) != pending["auto_start"]:
+                try:
+                    self._auto_start_setter(pending["auto_start"])
+                except Exception:
+                    # LaunchAgent 可能已部分变更，尽力恢复旧布尔状态再回滚配置。
+                    try:
+                        self._auto_start_setter(old.get("auto_start", False))
+                    except Exception:
+                        pass
+                    raise
+        except Exception:
+            self.config = old
+            # 尽力把磁盘恢复为旧值；原始异常继续抛给 IPC，不能假装成功。
+            try:
+                self._save_config()
+            except Exception:
+                pass
+            raise
         return {"auto_mount": self.config.get("auto_mount", True),
                 "auto_start": self.config.get("auto_start", False),
                 "mount_dir": self.config.get("mount_dir", "")}

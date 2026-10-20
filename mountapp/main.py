@@ -43,7 +43,15 @@ class _ServiceCore:
 
     def __init__(self, client):
         self._c = client
-        self.config = {"auto_mount": True, "auto_start": False, "mount_dir": ""}
+        try:
+            cfg = self._c.call("get_config")
+        except Exception:
+            cfg = {}
+        self.config = {
+            "auto_mount": bool(cfg.get("auto_mount", True)),
+            "auto_start": bool(cfg.get("auto_start", False)),
+            "mount_dir": cfg.get("mount_dir") or "",
+        }
         self.status_text = ""
         self.mount_path = None
 
@@ -89,13 +97,12 @@ class _ServiceCore:
             return False, str(e)
 
     def set_auto_start(self, enabled):
-        try:
-            self._c.call("set_config", {"auto_start": bool(enabled)})
-        except Exception:
-            pass
+        data = self._c.call("set_config", {"auto_start": bool(enabled)})
+        self.config.update(data)
 
     def save_config(self):
-        pass
+        data = self._c.call("set_config", self.config)
+        self.config.update(data)
 
 
 class App(tk.Tk):
@@ -204,12 +211,15 @@ class App(tk.Tk):
     # ---------- 操作 ----------
     def _save_settings(self):
         try:
-            self.core._c.call("set_config", {
+            data = self.core._c.call("set_config", {
                 "auto_mount": self.auto_mount_var.get(),
                 "auto_start": self.auto_start_var.get()})
-        except Exception:
-            pass
-        self.core.set_auto_start(self.auto_start_var.get())
+            self.core.config.update(data)
+        except Exception as e:
+            self.log_label.config(text=f"设置保存失败: {e}")
+            # 回滚界面到服务端权威配置，避免复选框假装已生效。
+            self.auto_mount_var.set(self.core.config.get("auto_mount", True))
+            self.auto_start_var.set(self.core.config.get("auto_start", False))
 
     def _mount(self):
         self._run_async(lambda: self.core.mount())

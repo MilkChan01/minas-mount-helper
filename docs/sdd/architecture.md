@@ -31,7 +31,7 @@ Finder / NetFS 挂载只与本地数据面对话，不直接接触控制面。
 │  discovery(DiscoveryBackend) │ proxy(内嵌, SR-1 入站/缓存/写安全重试/连接池, adopt(snap)) │ mount(MountBackend) │
 │  state publish(publish_target CAS, last_generation) │ ipc server(0700 目录/0600 mwdav.sock, newline JSON)    │
 └───────▲───────────────────────────────────────────────┬──────────────────────────────────────────────────────────┘
-        │ status 脱敏只读视图(代次/端口/挂载态/错误)     │ 白名单命令: status/mount/unmount/open_finder/refresh/set_config/stop
+        │ status 脱敏只读；get_config 非敏感配置          │ 白名单: status/get_config/mount/unmount/open_finder/refresh/set_config/stop
         └────────────────────────────────────────────────┼──────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────▼──────────────────────────────────────────────────────────┐
 │  GUI：main.py 无参 = IPC 客户端（展示 + 下发命令；退出不断服务、不持有服务状态）；--service = 前台 serve()       │
@@ -63,14 +63,14 @@ Finder / NetFS ── 本地回环 ──▶ 内嵌 proxy ── HTTPS(SR-3) ─
 | proxy（内嵌 ProxyServer，单实例） | `start/stop/is_running/adopt(snap)`，`proxy_factory(port)` 注入 | 不另起子进程；不回写配置 |
 | mount/self-heal | `MountBackend.ensure_capable/mount/unmount/own_mountpoint` | 不误认/误卸他卷；fake 不碰真实 /sbin/mount 与 netfs |
 | state publish | `publish_target(expected_generation)` CAS、`last_generation()`、`status_view()` | 不被 GUI 直接写；健康仅内存 |
-| ipc server | newline-delimited JSON，白名单 `status/mount/unmount/open_finder/refresh/set_config/stop` | 无 publish/任意凭证命令/代理透传/RCE 面 |
+| ipc server | newline-delimited JSON，白名单 `status/get_config/mount/unmount/open_finder/refresh/set_config/stop` | 无 publish/任意凭证命令/代理透传/RCE 面 |
 
 ## 3. 跨模块契约（两份 specs 必须一致）
 
 ### 3.1 目标快照（控制面 → 数据面）
 - 载体：本地文件（schema_version=2），原子替换；字段含 `generation:int, published_at, host, port,
   base, username, password, tls{ca_file,cert_file,key_file,server_name,verify}`。
-- 控制面（GUI AppCore）唯一写，带 `expected_generation` CAS 拒旧代次；数据面只读；
+- 常驻控制面（ResidentService）唯一写，带 `expected_generation` CAS 拒旧代次；GUI 只经 IPC；数据面只读；
   读取不得调用持久化/重置/回写（修 T03、D02）；健康（connected/error/闭锁）只在内存不落盘。
 - TLS 配置入口：`config.json -> tls_server_name`（必填，SNI+hostname）、`tls_ca_file/
   tls_cert_file/tls_key_file`（可选绝对路径，本地官方目录兜底）；`MWDAV_TLS_SERVER_NAME/

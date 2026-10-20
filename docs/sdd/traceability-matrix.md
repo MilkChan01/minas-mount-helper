@@ -3,7 +3,7 @@
 - 基线：`d25c2516a17a28321df9cdaf4dd7c82662af3d3a`
 - 缺陷编号固定为离线验证 14 项（T01–T14，源自 `架构评审/离线特征验证.py`）；
   动态端口原 7 场景编号 D01–D07（源自 `动态端口定位/动态端口复现测试.py`），
-  PR #2 macOS 实测追加端口选择回归 D08。
+  PR #2 macOS 实测追加端口选择回归 D08；公开命令/协议文档契约审计 M01–M09。
 - 状态取值：`基线复现`（已在基线复现、未修）/ `修复中` / `已关闭` / `已关闭`。
 - 分组：**数据面** = 本地回环代理（mwdav_proxy.py / state_store.py / tls_transport.py）；
   **控制面** = 发现/发布/挂载/界面（main.py / app_core.py / conn_manager.py）；
@@ -70,7 +70,21 @@
 | S06 | 目录 0700/socket 0600/属主 uid；白名单外命令零副作用；无 publish/任意凭证/透传；status 脱敏 | FR-5.6 | 服务 | test_acceptance_service_ipc.py | A（Linux/loopback） | 已关闭 |
 | S07 | status_view()/status 仅白名单键、只读内存视图，不触发 refresh/publish/写；写操作走显式命令 | FR-5.7 | 服务 | test_acceptance_service_ipc.py | A（Linux/loopback） | 已关闭 |
 
-## C. 矩阵维护规则
+## C. 文档/平台契约审计（M01–M09）
+
+| 编号 | 文档反证与故障模式 | 需求 | 实现落点 | 回归测试 | 验收层 | 状态 |
+|---|---|---|---|---|---|---|
+| M01 | 默认配置覆盖已保存值；服务未加载/持久化；GUI 假显示 auto_start | FR-6.1 | app_core/service/main | test_macos_contract_audit.py::test_m01_* | A | 已关闭 |
+| M02 | launcher 仅支持 bundle 路径、0644、宽泛 pgrep 误判 | FR-6.2 | launcher.sh | test_macos_contract_audit.py::test_m02_* | A（实机 LaunchAgent 见 B） | 已关闭 |
+| M03 | 文档宣称自愈，服务却不清死卷/不检查活性 | FR-6.3 | service/SystemMount | test_macos_contract_audit.py::test_m03_* | A（真实 mount 表见 B） | 已关闭 |
+| M04 | OPTIONS 200/207 无 DAV 头也 confirmed，可能选错本地 TLS 服务 | FR-6.4 | conn_manager._probe_once | test_macos_contract_audit.py::test_m04_* | A | 已关闭 |
+| M05 | 未配置目标误报 401；Connection: close 未设置 handler flag | FR-6.5 | Handler._handle/_send_simple | test_macos_contract_audit.py::test_m05_* | A | 已关闭 |
+| M06 | `pgrep -f` 子串误认无关进程 | FR-6.4 | find_sso_login_pid | test_macos_contract_audit.py::test_m06_* | A（多同名真实进程见 B） | 已关闭 |
+| M07 | TLS 闭锁只记录不执行；代理 CLI 可把凭证放 argv | FR-6.6、SR-4 | _send_upstream/CLI | test_macos_contract_audit.py::test_m07_* | A | 已关闭 |
+| M08 | executor context 在首个 confirmed 后仍等待慢任务 | FR-6.4 | _parallel_first_confirmed | test_macos_contract_audit.py::test_m08_* | A | 已关闭 |
+| M09 | env SNI 值未用于连接；adopt 缺锁；Expect 提前放体；读体前无门禁；IPC reader 泄漏；半启动遗锁 | FR-6.5/FR-6.6 | proxy/client/service | test_macos_contract_audit.py::test_m09_* | A | 已关闭 |
+
+## D. 矩阵维护规则
 
 1. 修复一项即把状态改为 `已关闭`，回归脚本在 A 层通过后改 `已关闭`，并在备注补实际测试文件名。
 2. 新增缺陷必须先在本矩阵登记编号、需求、分组、验收层，再写代码（SDD 顺序）。

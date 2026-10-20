@@ -51,8 +51,8 @@ class ProxyServerLifecycleTests(unittest.TestCase):
         self.assertGreater(port, 0)
         self.assertTrue(srv.is_running())
         self.assertEqual(srv.listen_port, port)
-        # 匿名请求先被入站认证拒绝（401），证明服务线程在响应。
-        self.assertEqual(_get(port), 401)
+        # 未发布目标时返回 503，证明服务线程在响应且配置故障不误报成认证失败。
+        self.assertEqual(_get(port), 503)
 
         srv.stop()
         self.assertFalse(srv.is_running())
@@ -78,14 +78,14 @@ class ProxyServerLifecycleTests(unittest.TestCase):
         self.assertIsNone(dup.listen_port)
         # 原服务未被波及。
         self.assertTrue(first.is_running())
-        self.assertEqual(_get(port), 401)
+        self.assertEqual(_get(port), 503)
 
     def test_repeated_start_stop_cycle_no_leak(self):
         srv = mod.ProxyServer(0)
         for _ in range(3):
             port = srv.start()
             self.assertTrue(srv.is_running())
-            self.assertEqual(_get(port), 401)
+            self.assertEqual(_get(port), 503)
             srv.stop()
             self.assertFalse(srv.is_running())
             self.assertEqual(self._http_thread_names(), [])

@@ -6,8 +6,9 @@
 - 文档状态：本分支定稿。本文件只定义"系统应当是什么"，不记录实现细节；
   模块内部设计见 `docs/specs/proxy.md`（数据面）与 `docs/specs/runtime.md`（控制面）。
 - 证据来源：`架构评审/离线特征验证.py`（14 项离线特征复现，编号 T01–T14）、
-  `动态端口定位/动态端口复现测试.py`（原 7 个回环场景，编号 D01–D07）以及
-  PR #2 macOS 实测发现的端口选择回归（D08）。
+  `动态端口定位/动态端口复现测试.py`（原 7 个回环场景，编号 D01–D07）、
+  PR #2 macOS 实测发现的端口选择回归（D08），以及基于公开命令/协议文档的
+  macOS 契约审计（M01–M09，`tests/test_macos_contract_audit.py`）。
 
 ## 0. 术语与边界
 
@@ -42,7 +43,7 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
 - FR-1.2 快路径（PID → 端口 → 凭证 → WebDAV 端口探测）成功后，**立即**把目标快照发布给数据面；
   可选的存储统计（get_pool_info）必须独立异步、限频、退避，**不得阻塞**目标发布（对应 D07）。
 - FR-1.3 目标快照含 `schema_version`、`generation`（单调递增）、`published_at`、设备/身份字段；
-  **唯一写者 = GUI 会话内的 AppCore（控制面）**，数据面 `load_snapshot()` 纯读不可变快照，
+  **唯一写者 = ResidentService（常驻控制面）**，数据面 `load_snapshot()` 纯读不可变快照，
   **读取零写副作用**：不落盘、不递增代次、不改内存目标，也永不调用发布接口回写（对应 T03 / D02）。
   运行健康（`connected`/`last_error`/TLS 闭锁）只在各进程内存，永不写入配置文件，读路径不得回写健康。
 - FR-1.4 发布由控制面经 `publish_target(..., expected_generation=...)` 完成，CAS 拒绝旧代次覆盖
@@ -114,12 +115,27 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
 - FR-5.5（S05）**显式 stop**：IPC `stop` 命令或 SIGTERM 触发同一幂等关停，独立于"关闭窗口"；
   停止后不再发布/自愈，退出码 0，重复 stop 不报错。
 - FR-5.6（S06）**IPC 安全**：运行时目录 0700、`mwdav.sock` 0600，属主当前用户；命令白名单
-  `status/mount/unmount/open_finder/refresh/set_config/stop`，其余命令 `ok=false` 零副作用；
-  无 `publish`、无任意上游/凭证命令、无代理透传、无 RCE 面；`set_config` 仅 `auto_mount/auto_start/mount_dir`
-  （归一化绝对路径、拒 `..`/逃逸/非 `/Volumes`）。
+  `status/get_config/mount/unmount/open_finder/refresh/set_config/stop`，其余命令 `ok=false` 零副作用；
+  无 `publish`、无任意上游/凭证命令、无代理透传、无 RCE 面；`get_config` 只回显非敏感
+  `auto_mount/auto_start/mount_dir`；`set_config` 仅允许这三项并持久化，`auto_start` 实际安装/卸载 LaunchAgent，
+  `mount_dir` 必须为归一化 `/Volumes/...` 路径（拒 `..`/逃逸）。
 - FR-5.7（S07）**状态只读暴露**：`status_view()`/IPC `status` 仅含白名单键（service_pid/connected/mode/
   webdav_port/mounted/mount_path/storage/error/generation），禁止 username/password/token/私钥/CA 内容；
   `status` 只读内存视图，不触发 refresh/publish/写。
+
+### FR-6 平台/协议契约审计（M01–M09）
+- FR-6.1 配置以常驻服务为权威：已保存值覆盖默认值；生产无参服务加载 `config.json`；`set_config`
+  原子持久化且 `auto_start` 真正联动 LaunchAgent；GUI 经 `get_config` 初始化，失败回滚而不假装生效（M01）。
+- FR-6.2 启动器同时支持源码目录与 `.app/Contents/MacOS → ../Resources` 布局，文件模式 0755，
+  校验 Python 3.10+、ssl、tkinter；单实例只由服务 flock 决定，禁止宽泛 `pgrep -f` 跳过启动（M02）。
+- FR-6.3 常驻自愈连续两轮断线时只卸载己方卷，恢复后按 `auto_mount` 重挂；用户显式卸载意图优先；
+  已挂载但 `mount_point_alive` 连续失活时执行同样恢复链（M03）。
+- FR-6.4 DAV 候选必须同时满足成功状态和明确 `DAV` 能力头；`sso_login` 用 `pgrep -x` 精确识别；
+  并发探测发布首个 confirmed 后不得等待无关慢探针（M04/M06/M08）。
+- FR-6.5 HTTP/1.1 拒绝路径必须设置 `close_connection`；`Expect: 100-continue` 必须在发送 100 前完成
+  目标、认证、chunked、Content-Length 与体积门禁；进入读取请求体前获取有界并发槽位（M05/M09）。
+- FR-6.6 TLS 闭锁冷却期快速失败；环境变量解析后的 `server_name` 必须用于实际 SNI/hostname；
+  `Upstream.adopt` 在锁内原子采纳；IPC reader 复用并关闭；服务启动失败释放 socket 与 flock（M07/M09）。
 
 ## 3. 安全需求（Security Requirements）
 
@@ -145,7 +161,8 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
     文档与验收一律禁止 insecure 降级。CA 缺失、客户端证书/私钥加载失败一律 fail-closed 并给出可诊断原因。
   文档不得宣称"客户端证书双向认证确保连接的是真正 NAS"——客户端认证与服务端验证是两件事；
   官方 P2P 隧道真实证书链在仓库外，本规格只约束本仓库代码与措辞。
-- SR-4 凭证不落 argv：NetFS 挂载、curl 探活等不得把密码放在命令行参数；改用受控管道/环境/文件描述符。
+- SR-4 凭证不落 argv：NetFS 挂载、代理 CLI、curl 探活等不得把密码放在命令行参数；改用受控管道、
+  0600 状态文件、环境或文件描述符；代理 CLI 不提供 `--username/--password`。
 - SR-5 状态文件安全：确需落盘的凭证以 600 权限、目录 700、原子方式写入；日志不得记录
   密码、Authorization、私钥或完整用户文件路径。
 - SR-6 默认安全：默认 `pytest`/测试入口只运行离线安全脚本，不得触网、不得挂载、
@@ -157,7 +174,7 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
 - NFR-2 可观测：诊断字段包含发现代次、候选/选中端口、目标更新时间、失败阶段
   （connect/tls/http/dav）、TLS 错误类型、HTTP 状态、DAV 能力、证书是否加载成功；不含敏感值。
 - NFR-3 性能目标保持现状并可量化：连接复用只在身份变化时失效；大目录 PROPFIND 缓存 TTL 可配。
-- NFR-4 可维护：每条缺陷（T01–T14、D02/D04/D05/D06/D07/D08）在 traceability 矩阵中有唯一编号、
+- NFR-4 可维护：每条缺陷（T01–T14、D02/D04/D05/D06/D07/D08、M01–M09）在 traceability 矩阵中有唯一编号、
   需求、设计归属、回归测试与验收层；无悬空占位。
 
 ## 5. 验收分层（摘要，详见 acceptance.md）
@@ -184,6 +201,7 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
 | SR-1 | T01 |
 | SR-3 | T11、D05、D06 |
 | FR-5.1 ~ FR-5.7 | S01 ~ S07（Linux/loopback 自动验收已关闭；LaunchAgent/Finder 实机 B 层未执行） |
+| FR-6.1 ~ FR-6.6 | M01 ~ M09（文档/命令/协议契约离线关闭；真实 macOS/NAS 行为见 B 层） |
 
 D01（无竞态正常切换 200）与 D03（单写者内存对照）是**控制/对照场景**，不是待修缺陷，
 用于回归时证明"端口变化本身可成功、单写者因果成立"。

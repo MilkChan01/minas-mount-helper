@@ -16,6 +16,7 @@ class IpcClient:
         self.socket_path = socket_path
         self.timeout = timeout
         self._sock = None
+        self._reader = None
         self._seq = 0
 
     def __enter__(self):
@@ -31,13 +32,16 @@ class IpcClient:
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.settimeout(self.timeout)
         self._sock.connect(self.socket_path)
+        self._reader = self._sock.makefile("r", encoding="utf-8")
 
     def call(self, cmd, args=None):
         self._seq += 1
         payload = {"cmd": cmd, "id": self._seq, "args": args or {}}
         self._sock.sendall(
             (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-        line = self._sock.makefile("r", encoding="utf-8").readline()
+        if self._reader is None:
+            self._reader = self._sock.makefile("r", encoding="utf-8")
+        line = self._reader.readline()
         if not line:
             raise ConnectionError("服务无响应")
         resp = json.loads(line)
@@ -49,6 +53,12 @@ class IpcClient:
         return self.call("status")
 
     def close(self):
+        if self._reader is not None:
+            try:
+                self._reader.close()
+            except OSError:
+                pass
+            self._reader = None
         if self._sock is not None:
             try:
                 self._sock.close()

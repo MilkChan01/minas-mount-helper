@@ -169,9 +169,13 @@ def _probe_once(port, cfg: TlsConfig, username, password, timeout,
         resp.read()
         dav = bool(resp.headers.get("DAV"))
         has_cert = bool(eff.cert_file)
-        if resp.status in (200, 207):
-            return ProbeOutcome("dav", "confirmed", resp.status, dav,
+        if resp.status in (200, 207) and dav:
+            return ProbeOutcome("dav", "confirmed", resp.status, True,
                                 has_cert, "ok", "")
+        if resp.status in (200, 207):
+            return ProbeOutcome("dav", "not_dav", resp.status, False,
+                                has_cert, "missing_dav_header",
+                                "OPTIONS 成功但缺少 DAV 能力头")
         if resp.status == 401:
             auth = (resp.headers.get("WWW-Authenticate") or "").lower()
             return ProbeOutcome(
@@ -309,7 +313,8 @@ def read_legacy(path=PROXY_STATE) -> dict:
 
 
 def find_sso_login_pid():
-    out = _run(["pgrep", "-f", "sso_login"])
+    # 按进程名精确匹配，避免 -f 子串命中本进程参数或无关 helper。
+    out = _run(["pgrep", "-x", "sso_login"])
     for line in out.splitlines():
         pid = line.strip()
         if pid.isdigit():
@@ -332,21 +337,26 @@ def find_tunnel_ports(pid):
 
 
 def _parallel_first_confirmed(items, fn, max_workers=16):
-    """并发探测，返回第一个 (port, ProbeOutcome) confirmed；其余分层结果不折叠、不落盘。"""
+    """并发探测并尽快返回首个 confirmed；不等待无关慢探针结束。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    chosen = None
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(fn, it): it for it in items}
+    ex = ThreadPoolExecutor(max_workers=max_workers)
+    futs = {ex.submit(fn, it): it for it in items}
+    try:
         for fut in as_completed(futs):
             port = futs[fut]
             try:
-                r = fut.result()
+                result = fut.result()
             except Exception:
-                r = None
-            if r and r.status == "confirmed":
-                chosen = (port, r)
-                break
-    return chosen
+                result = None
+            if result and result.status == "confirmed":
+                for other in futs:
+                    if other is not fut:
+                        other.cancel()
+                return port, result
+        return None
+    finally:
+        # cancel_futures 阻止尚未启动的任务；wait=False 保证首个确认不被慢输家拖住。
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 # ---------- LevelDB 凭证缓存（只读兜底） ----------

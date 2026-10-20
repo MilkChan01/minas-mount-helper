@@ -4,7 +4,7 @@
 
 核对：
 - 不得出现旧的 mTLS 绝对化承诺句；
-- 必须如实声明 sync_engine 未接入、GUI 退出无常驻守护、历史 ZIP 漂移；
+- 必须如实声明 sync_engine 未接入、GUI 退出后常驻服务继续、历史 ZIP 漂移；
 - 不得把客户端证书说成"确保连接真正 NAS"。
 """
 import os
@@ -44,10 +44,10 @@ class UserDocsHonestyTest(unittest.TestCase):
                 f"{os.path.basename(p)} 未声明 sync_engine 未接入",
             )
 
-    def test_user_docs_declare_gui_exit_limit(self):
+    def test_user_docs_declare_gui_exit_keeps_resident_service(self):
         blob = "\n".join(_read(p) for p in USER_DOCS)
-        self.assertIn("不再", blob)
-        self.assertTrue("无常驻" in blob or "无常驻守护" in blob or "不再自动发现" in blob)
+        self.assertIn("GUI 窗口关闭只断开 IPC", blob)
+        self.assertIn("常驻服务继续", blob)
 
     def test_user_docs_declare_zip_drift(self):
         blob = "\n".join(_read(p) for p in USER_DOCS)

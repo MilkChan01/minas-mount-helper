@@ -168,8 +168,9 @@ UP.snapshot() -> dict  # 含 generation/host/port/username/password/base/connect
 ### 4.2 入站认证（A01，始终 require，无开关）
 
 - 目标 `is_complete()` 但入站 Basic 不匹配 → `401 + WWW-Authenticate: Basic realm="MiNAS"`。
-- 目标未配齐 → `503` 文案"代理目标尚未配置"，不转发；实现上先做认证检查（未配齐时无凭证可比对，返回 401），比"未配齐→503"更严，安全方向可接受。
+- 目标未配齐 → `503` 文案“代理目标尚未配置”，不转发；该判定先于认证，避免在根本没有可比较凭证时把配置故障误报为 401。
 - 不存在匿名/optional/降级模式；NetFS 不携带凭证即明确失败，属待手工验收项，不以弱认证替代兼容。
+- 对 `Expect: 100-continue`，在返回 100 前执行目标完整性、入站认证、chunked、Content-Length 和体积门禁；拒绝时设置 `close_connection=True`。
 - 代理的读路径与 error 路径**绝不调用发布（publish）**；`UP.update` 仅用于 client 配置发布。
 
 ### 4.3 请求体/响应有界（A02 + 评审 P1 全量缓冲）
@@ -199,15 +200,17 @@ UP.snapshot() -> dict  # 含 generation/host/port/username/password/base/connect
 - 保守说明：不安全方法不区分 connect/send 阶段，任意传输失败都按"提交不确定"处理（宁可客户端显式复查，不冒双写风险）。
 - TLS 失败经 `TlsLockout` 闭锁：冷却期内直接快速失败并返回分类诊断，不反复握手。
 
-### 4.7 CLI 扩展（向后兼容）
+### 4.7 CLI（凭证不进 argv）
 
 ```
---port 18445 --upstream 49559 --username --password
---host 127.0.0.1 --base /pool0/data
+--port 18445 --upstream 49559 --host 127.0.0.1 --base /pool0/data
 --ca --cert --key --server-name
 --max-request-bytes --max-response-bytes
 ```
-（无 `--inbound-auth`、无 `--no-tls-verify` 降级开关。）
+
+独立代理从 0600 状态快照读取 username/password；不提供 `--username/--password`，无
+`--inbound-auth`、无 `--no-tls-verify` 降级开关。环境变量覆盖解析后的 `server_name`
+同时用于 SSLContext 缓存键和实际 SNI/hostname，不得只构建 context 却把旧值/None 传给连接。
 
 ### 4.8 嵌入常驻 service 的 ProxyServer 生命周期
 

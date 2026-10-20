@@ -34,6 +34,9 @@
 | D06 | 401 认证失败与 TLS 失败区分，401 单列 auth_required 候选并重试 | tests/dynamic/test_discovery_auth_layers.py | 通过（client 18 项连续通过） |
 | D07 | 快路径成功即发布目标，慢存储查询不阻塞；慢路径 SNI=server_name | tests/dynamic/test_fast_path_publish.py；tests/runtime/test_pool_sni.py | 通过（client 18 项连续通过） |
 | D08 | `lsof` 端口发现必须把 PID、TCP、LISTEN 作为 AND 条件，不得混入系统其他 App 监听端口 | tests/runtime/test_tunnel_port_selection.py | 通过（命令契约 + 混合输出 fixture）；macOS 复核见 B-2 |
+| M01–M03 | 配置覆盖/持久化/LaunchAgent 联动；launcher 双布局与 0755；断线/死挂载清理及恢复重挂 | tests/test_macos_contract_audit.py | 通过（离线契约）；LaunchAgent/NetFS 见 B 层 |
+| M04–M08 | DAV 头确认、503/401 顺序与 close、`pgrep -x`、TLS 闭锁、first-confirmed 不等慢探针 | tests/test_macos_contract_audit.py | 通过（离线契约） |
+| M09 | env server_name 真正用于 SNI；adopt 加锁；Expect 门禁；读体前并发槽；IPC reader 关闭；启动失败释放锁；代理 CLI 无凭证参数 | tests/test_macos_contract_audit.py | 通过（离线契约） |
 
 ## S 层 · 常驻服务架构（FR-5 / S01–S07，Linux/loopback 自动验收）
 
@@ -44,7 +47,7 @@
 |---|---|---|---|
 | S01 | `ResidentService` 单进程内嵌单 ProxyServer（`proxy_factory`，无独立子进程）；唯一发布者；单实例 flock，第二实例非零退出；`start/serve/stop` 干净释放端口/锁 | tests/test_acceptance_service_lifecycle.py | 已关闭（Linux/loopback 自动） |
 | S02 | discovery/proxy/mount/state/ipc 五模块经构造注入 Protocol 交互，不跨边界直写；`adopt(snap)` 采纳、`publish_target` CAS；生产 `SystemMount` 将服务当前 DiscoveryView 的目标/凭证送入显式凭证挂载入口，不回读独立空连接状态 | tests/test_service_runtime.py；tests/test_production_mount_adapter.py | 已关闭（Linux/loopback 自动） |
-| S03 | GUI（无参 main.py）仅 IPC 客户端：`status` 只读、白名单命令，不持有/发布服务状态 | tests/test_acceptance_service_ipc.py | 已关闭（Linux/loopback 自动） |
+| S03 | GUI（无参 main.py）仅 IPC 客户端：`status` 只读、`get_config` 读取非敏感配置、其余白名单命令，不持有/发布服务状态 | tests/test_acceptance_service_ipc.py；tests/test_macos_contract_audit.py | 已关闭（Linux/loopback 自动） |
 | S04a | GUI 断开 IPC 后服务循环继续，A→B 二次发布被采纳（自动部分） | tests/test_acceptance_service_lifecycle.py（注入轮换断言二次发布） | 已关闭（Linux/loopback 自动） |
 | S04b | macOS LaunchAgent 登录拉起/KeepAlive 保活、Finder/NetFS 实机挂载 | B 层实机 | 未执行（B 层） |
 | S05 | `stop` 命令/SIGTERM 幂等：drain→join→停代理→unlink→释放锁→退出码 0；与关窗分离，重复 stop 不报错 | tests/test_acceptance_service_lifecycle.py | 已关闭（Linux/loopback 自动） |
