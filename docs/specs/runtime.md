@@ -237,4 +237,5 @@ class DiscoveryView:
 
 ## 7. 已知限制（如实声明）
 - Linux 无 macOS/NetFS/Finder：实机挂载卸载、真实 `/sbin/mount` 表、lsof/pgrep、LaunchAgent、tkinter 交互未执行。
-- `netfs_mount` 需 macOS 重编译；既有二进制未改、未伪造；真实 NAS mTLS/设备 CN-SAN 未知。
+- `netfs_mount` 已由 macOS CI 使用 Apple SDK 构建为 arm64+x86_64 Universal、0755，并验证 v2 stdin 协议；
+  真实 Finder/NAS 挂载和错误码仍未实机验证。真实 NAS mTLS/设备 CN-SAN 未知。

@@ -32,8 +32,8 @@
 - 不新增硬编码凭证；历史暴露凭证提示所有者轮换，本仓库不代为轮换、不复制。
 - 入站恒 require/fail-closed；不实现 optional 匿名。
 - TLS 不提供跳过校验开关；`tls_server_name` 必填、env 优先、fail-closed。
-- 既有历史发布物不在常规改动中改写：`MiNAS-Mount-Helper-v1.4.zip` 与现有 `netfs_mount` 二进制
-  保持原样、不在旧包上打补丁；后续正式发布可在受控流程中重新编译/打包。
+- 历史 ZIP `MiNAS-Mount-Helper-v1.4.zip` 保持不变。`mountapp/netfs_mount` 仅通过 M11 macOS CI
+  受控重建：arm64/x86_64、Universal、0755、v2 协议全部验证后方可替换。
 
 ## 验收纪律
 

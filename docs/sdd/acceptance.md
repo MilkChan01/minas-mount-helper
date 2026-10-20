@@ -38,7 +38,7 @@
 | M04–M08 | DAV 头确认、503/401 顺序与 close、`pgrep -x`、TLS 闭锁、first-confirmed 不等慢探针 | tests/test_macos_contract_audit.py | 通过（离线契约） |
 | M09 | env server_name 真正用于 SNI；adopt 加锁；Expect 门禁；读体前并发槽；IPC reader 关闭；启动失败释放锁；代理 CLI 无凭证参数 | tests/test_macos_contract_audit.py | 通过（离线契约） |
 | M10 | 手动挂载复位卸载意图；query 保留；原生 SSL 分类闭锁；helper 超时 kill/reap；stdin 凭证保留空白 | tests/test_macos_contract_audit.py | 通过（离线契约）；Objective-C 编译与真实 NetFS 见 B 层 |
-| M11 | macOS runner 双架构编译并合并 Universal Mach-O；0755；arm64+x86_64；`--protocol`=v2；上传 artifact | `.github/workflows/netfs-universal.yml` | 构建中；真实 Finder/NAS 挂载仍见 B 层 |
+| M11 | macOS runner 双架构编译并合并 Universal Mach-O；0755；arm64+x86_64；`--protocol`=v2；上传 artifact；仓库二进制复核同一契约 | `.github/workflows/netfs-universal.yml` | 通过（macOS CI 构建/协议/架构/权限）；真实 Finder/NAS 挂载仍见 B 层 |
 
 ## S 层 · 常驻服务架构（FR-5 / S01–S07，Linux/loopback 自动验收）
 
@@ -69,7 +69,7 @@
 | B-5 | 其他 WebDAV 卷已挂载时运行助手自愈 | 不误认、不误卸他卷 | 未执行 |
 | B-6 | 断开隧道再恢复 | 死挂载被清理、恢复后自动重挂；用户主动卸载后不被自动挂回 | 未执行 |
 | B-7 | 15.7+ NetFS 自动挂载（入站恒 require/fail-closed） | NetFS 携带凭证且自动挂载成功；若 NetFS 不送凭证导致失败，记为**兼容性失败/未完成**，不得用匿名或 optional 绕过 | 未执行（兼容性失败开放项） |
-| B-8 | Apple Silicon 原生运行 | netfs_mount 对应架构可用（或文档说明仅 x86_64） | 未执行 |
+| B-8 | Apple Silicon 原生运行 | Universal helper 已由 macOS CI 验证含 arm64+x86_64；仍需在 Apple Silicon 上做 Finder/NetFS 真实挂载 | 构建门禁通过；实机挂载未执行 |
 | B-9 | macOS 实机：关闭 GUI 窗口后观察常驻服务 | 服务（LaunchAgent 保活）继续发现/跟随/自愈；Finder/NetFS 挂载保持 | 未执行（B 层；自动部分见 S04a） |
 
 ## 验收签署

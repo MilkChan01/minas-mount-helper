@@ -137,23 +137,21 @@ class InventoryPolicyTest(unittest.TestCase):
             "mountapp 源码残留基线泄露凭证（仅显示 hash 前缀，不明文）:\n"
             + "\n".join(hits))
 
-    # ---- 旧 netfs 二进制：与固定基线哈希比对；源码包/无 git 时显式 N/A，不静默 ----
-    def test_netfs_binary_unchanged_vs_baseline(self):
+    # ---- M11：旧 x86_64/0644 blob 必须由 macOS CI 验证的 Universal v2 产物替换 ----
+    def test_netfs_binary_replaced_by_verified_universal_build(self):
         binary = MOUNTAPP / "netfs_mount"
-        # 源码包/浅克隆不含二进制（仅 macOS 构建产物）→ 显式 skip，不算通过也不算失败
         if not binary.exists():
-            self.skipTest("源码包未包含 netfs_mount 二进制，本项 N/A（仅 macOS 构建产物）")
+            self.skipTest("源码包未包含 netfs_mount 二进制，本项 N/A")
         try:
             work = subprocess.run(
                 ["git", "hash-object", str(binary)], cwd=REPO_ROOT,
                 capture_output=True, text=True, check=True).stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
-            # 无 git/无仓库历史 → 无法比对，显式 N/A，不静默当通过
             self.skipTest(f"无 git 可用，二进制哈希比对 N/A: {e}")
-        # 比固定基线哈希，不比 HEAD（HEAD 漂移/浅克隆缺历史都不误判）
-        self.assertEqual(
+        self.assertNotEqual(
             work, NETFS_BINARY_ORIGINAL_SHA1,
-            "旧 netfs_mount 二进制与基线原哈希不一致；历史二进制必须保持原样")
+            "仍是旧 x86_64/0644 netfs_mount；必须用 macOS CI 验证的 Universal v2 产物替换")
+        self.assertTrue(os.access(binary, os.X_OK), "交付 helper 必须具备可执行权限")
 
     def test_netfs_source_uses_stdin_not_argv_for_credentials(self):
         src = _read(MOUNTAPP / "netfs_mount.m")

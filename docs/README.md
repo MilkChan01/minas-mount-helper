@@ -24,5 +24,5 @@
 
 - 新增/修改行为必须先登记 traceability 矩阵与 requirements，再写代码。
 - A 层测试在 `tests/`；默认离线，不连真实 NAS、不挂载、不用真实凭证。
-- 既有历史发布物不在常规改动中改写：`MiNAS-Mount-Helper-v1.4.zip` 与现有 `netfs_mount` 二进制
-  保持原样，后续正式发布可在受控流程中重新编译/打包。
+- 历史 ZIP `MiNAS-Mount-Helper-v1.4.zip` 保持原样。`mountapp/netfs_mount` 按 M11 由 macOS CI
+  双架构编译、Universal 合并并校验后受控替换，不接受手工生成的未验证二进制。

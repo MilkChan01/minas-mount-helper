@@ -108,7 +108,8 @@ clang -framework Foundation -framework NetFS -o netfs_mount netfs_mount.m
 - **下载响应体上限 64MiB**：`MAX_RESPONSE_BODY` 硬限，上游响应超限即中止并 `507`、关闭上游连接；
   v1 不做流式 spool/背压，超大文件下载明确失败而非静默截断。
 - **拒绝 chunked 写方法**：`Transfer-Encoding: chunked` 的写请求返回 `501`（v1 不做流式解码）。
-- **挂载助手需按 v2 stdin 协议重新编译**：旧 `netfs_mount` 二进制无协议标记会被拒绝，凭证走 stdin、不进 argv。
+- **挂载助手已按 v2 stdin 协议受控重建**：macOS CI 使用 Apple SDK 编译 arm64+x86_64 Universal Mach-O，
+  校验 0755 与 `MWDAV_MOUNT_PROTOCOL=2`；凭证走 stdin、不进 argv。真实 Finder/NAS 挂载仍需 B 层实机验证。
 - **TLS 受信身份必须显式配置**：`tls_server_name` 必填（同时用于 SNI 与主机名校验），
   `MWDAV_TLS_SERVER_NAME/CA_FILE/CERT_FILE/KEY_FILE` 环境变量优先；**无 `tls_verify=false`/`MWDAV_TLS_VERIFY` 跳过开关**，
   缺失受信配置 fail-closed，不从对端证书或连接池自动学习身份。

@@ -13,8 +13,8 @@
 
 - `docs/specs/proxy.md`、`docs/specs/runtime.md` 分别由对应模块维护者编写；
   评审只核对其与主规格、矩阵一致，不代写内容。
-- 既有历史发布物不在常规改动中改写：`MiNAS-Mount-Helper-v1.4.zip` 与现有 `netfs_mount` 二进制
-  保持原样，不在旧包上打补丁；后续正式发布可在受控流程中重新编译/打包。
+- 历史 ZIP `MiNAS-Mount-Helper-v1.4.zip` 保持原样；`mountapp/netfs_mount` 仅按 M11 从
+  macOS CI 的已验证 Universal artifact 受控替换。
 
 ## 2. 变更流程（每个需求/缺陷走一遍）
 
@@ -34,7 +34,7 @@
 - [ ] `python3 tests/run_tests.py`（默认，离线）全绿；不触网、不挂载、不用真实凭证。
 - [ ] 无新增硬编码凭证；旧根探针默认拒绝执行（见 `tests/README.md` 隔离说明）。
 - [ ] 文档安全声明与代码一致（尤其 mTLS ≠ 服务器验证、未接入功能不宣称）。
-- [ ] 历史 `MiNAS-Mount-Helper-v1.4.zip` 与 `netfs_mount` 二进制未被修改。
+- [ ] 历史 ZIP 未修改；`netfs_mount` 若变化，必须来自 M11 macOS CI artifact 且通过双架构/协议/权限校验。
 - [ ] B 层未完成项已在发布说明/acceptance.md 显式标注"未实机验证"。
 
 ## 4. 测试分层
@@ -50,6 +50,6 @@ pytest/run_tests 收集；需 `--allow-live` + `MINAS_TEST_*` 环境凭证才人
 ## 5. 协作纪律
 
 - 不轮换、不复制、不在新文件中书写历史暴露的真实凭证；只在安全说明提示所有者轮换。
-- 不改历史 ZIP 与现有 netfs 二进制，不在旧包上"打补丁"；发布漂移如实说明，后续正式发布可受控重建。
+- 不改历史 ZIP；`netfs_mount` 仅从 M11 macOS CI 已验证 artifact 受控更新。
 - 不把 Linux 离线通过说成 macOS 实机通过；未实机项显式标注。
 - 评审报告等有价值产物存入个人 artifacts 目录，并在交付回复中给出路径。

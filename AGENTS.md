@@ -38,7 +38,7 @@ clang -framework Foundation -framework NetFS -o mountapp/netfs_mount mountapp/ne
 
 ## 发布物与提交
 
-- 既有历史发布物不在常规改动中改写：`MiNAS-Mount-Helper-v1.4.zip` 与现有 `netfs_mount` 二进制
-  保持原样、不在旧包上打补丁；后续正式发布可在受控流程中重新编译/打包。
+- 历史发布 ZIP `MiNAS-Mount-Helper-v1.4.zip` 不在常规改动中改写。`mountapp/netfs_mount` 仅允许按
+  M11 受控流程由 macOS CI 从 `netfs_mount.m` 双架构编译、校验并替换；禁止手工编辑或提交未验证二进制。
 - 测试通过、文档与实现一致后，经审查可正常 commit 并提 PR；提交信息对应矩阵编号。
 - macOS 实机项（Finder/NetFS/多用户/Apple Silicon）属 B 层，本地 Linux 无法替代，未验须显式标注。

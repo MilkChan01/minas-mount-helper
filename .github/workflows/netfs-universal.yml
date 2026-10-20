@@ -58,6 +58,14 @@ jobs:
           [[ "$(stat -f '%Lp' build/netfs/netfs_mount)" == "755" ]]
           shasum -a 256 build/netfs/netfs_mount | tee build/netfs/netfs_mount.sha256
 
+      - name: Verify checked-in helper contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun lipo mountapp/netfs_mount -verify_arch arm64 x86_64
+          [[ "$(mountapp/netfs_mount --protocol)" == "MWDAV_MOUNT_PROTOCOL=2" ]]
+          [[ "$(stat -f '%Lp' mountapp/netfs_mount)" == "755" ]]
+
       - name: Upload verified Universal helper
         uses: actions/upload-artifact@v4
         with:
