@@ -3,7 +3,7 @@
 - 基线：`d25c2516a17a28321df9cdaf4dd7c82662af3d3a`
 - 缺陷编号固定为离线验证 14 项（T01–T14，源自 `架构评审/离线特征验证.py`）；
   动态端口原 7 场景编号 D01–D07（源自 `动态端口定位/动态端口复现测试.py`），
-  PR #2 macOS 实测追加端口选择回归 D08；公开命令/协议文档契约审计 M01–M10。
+  PR #2 macOS 实测追加端口选择回归 D08；公开命令/协议文档契约审计 M01–M11。
 - 状态取值：`基线复现`（已在基线复现、未修）/ `修复中` / `已关闭` / `已关闭`。
 - 分组：**数据面** = 本地回环代理（mwdav_proxy.py / state_store.py / tls_transport.py）；
   **控制面** = 发现/发布/挂载/界面（main.py / app_core.py / conn_manager.py）；
@@ -70,7 +70,7 @@
 | S06 | 目录 0700/socket 0600/属主 uid；白名单外命令零副作用；无 publish/任意凭证/透传；status 脱敏 | FR-5.6 | 服务 | test_acceptance_service_ipc.py | A（Linux/loopback） | 已关闭 |
 | S07 | status_view()/status 仅白名单键、只读内存视图，不触发 refresh/publish/写；写操作走显式命令 | FR-5.7 | 服务 | test_acceptance_service_ipc.py | A（Linux/loopback） | 已关闭 |
 
-## C. 文档/平台契约审计（M01–M10）
+## C. 文档/平台契约审计（M01–M11）
 
 | 编号 | 文档反证与故障模式 | 需求 | 实现落点 | 回归测试 | 验收层 | 状态 |
 |---|---|---|---|---|---|---|
@@ -84,6 +84,7 @@
 | M08 | executor context 在首个 confirmed 后仍等待慢任务 | FR-6.4 | _parallel_first_confirmed | test_macos_contract_audit.py::test_m08_* | A | 已关闭 |
 | M09 | env SNI 值未用于连接；adopt 缺锁；Expect 提前放体；读体前无门禁；IPC reader 泄漏；半启动遗锁 | FR-6.5/FR-6.6 | proxy/client/service | test_macos_contract_audit.py::test_m09_* | A | 已关闭 |
 | M10 | 服务挂载不复位卸载意图；query 被编码进 path；原生 SSL 绕过分类闭锁；helper 超时未回收；凭证合法空白被裁剪 | FR-6.6/FR-6.7 | service/proxy/tls/app_core/netfs | test_macos_contract_audit.py::test_m10_* | A（Objective-C 编译/真实 NetFS 见 B） | 已关闭 |
+| M11 | 仓库 helper 为旧 x86_64/0644，无法代表 v2 stdin 协议或 Apple Silicon 交付 | FR-6.8 | macOS CI + netfs_mount binary | `netfs-universal` job：双架构编译、lipo、协议、0755、artifact | macOS CI（真实挂载见 B） | 构建中 |
 
 ## D. 矩阵维护规则
 

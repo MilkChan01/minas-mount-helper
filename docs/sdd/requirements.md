@@ -8,7 +8,7 @@
 - 证据来源：`架构评审/离线特征验证.py`（14 项离线特征复现，编号 T01–T14）、
   `动态端口定位/动态端口复现测试.py`（原 7 个回环场景，编号 D01–D07）、
   PR #2 macOS 实测发现的端口选择回归（D08），以及基于公开命令/协议文档的
-  macOS 契约审计（M01–M10，`tests/test_macos_contract_audit.py`）。
+  macOS 契约审计（M01–M11，`tests/test_macos_contract_audit.py` 与 macOS CI）。
 
 ## 0. 术语与边界
 
@@ -123,7 +123,7 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
   webdav_port/mounted/mount_path/storage/error/generation），禁止 username/password/token/私钥/CA 内容；
   `status` 只读内存视图，不触发 refresh/publish/写。
 
-### FR-6 平台/协议契约审计（M01–M10）
+### FR-6 平台/协议契约审计（M01–M11）
 - FR-6.1 配置以常驻服务为权威：已保存值覆盖默认值；生产无参服务加载 `config.json`；`set_config`
   原子持久化且 `auto_start` 真正联动 LaunchAgent；GUI 经 `get_config` 初始化，失败回滚而不假装生效（M01）。
 - FR-6.2 启动器同时支持源码目录与 `.app/Contents/MacOS → ../Resources` 布局，文件模式 0755，
@@ -139,6 +139,9 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
   服务启动失败释放 socket 与 flock（M07/M09/M10）。
 - FR-6.7 手动挂载成功清除服务层“用户已卸载”意图，失败不清除；上游 URL 只编码 path、原样保留 query；
   NetFS helper 超时必须 kill 后再次 communicate 回收；stdin 凭证只移除 LF/CRLF 分隔符，不裁剪合法空白（M10）。
+- FR-6.8 `netfs_mount.m` 必须在 GitHub Actions macOS runner 使用 Apple SDK 分别编译 arm64/x86_64，
+  以 `lipo -create` 合并 Universal Mach-O；交付二进制模式 0755，`lipo -verify_arch arm64 x86_64` 通过，
+  `--protocol` 精确输出 `MWDAV_MOUNT_PROTOCOL=2`。CI 上传已验证产物；Finder/真实 NAS 挂载仍属 B 层（M11）。
 
 ## 3. 安全需求（Security Requirements）
 
@@ -177,7 +180,7 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
 - NFR-2 可观测：诊断字段包含发现代次、候选/选中端口、目标更新时间、失败阶段
   （connect/tls/http/dav）、TLS 错误类型、HTTP 状态、DAV 能力、证书是否加载成功；不含敏感值。
 - NFR-3 性能目标保持现状并可量化：连接复用只在身份变化时失效；大目录 PROPFIND 缓存 TTL 可配。
-- NFR-4 可维护：每条缺陷（T01–T14、D02/D04/D05/D06/D07/D08、M01–M10）在 traceability 矩阵中有唯一编号、
+- NFR-4 可维护：每条缺陷（T01–T14、D02/D04/D05/D06/D07/D08、M01–M11）在 traceability 矩阵中有唯一编号、
   需求、设计归属、回归测试与验收层；无悬空占位。
 
 ## 5. 验收分层（摘要，详见 acceptance.md）
@@ -204,7 +207,7 @@ G4. 所有安全声明与实际代码一致：不宣称未实现的服务器证�
 | SR-1 | T01 |
 | SR-3 | T11、D05、D06 |
 | FR-5.1 ~ FR-5.7 | S01 ~ S07（Linux/loopback 自动验收已关闭；LaunchAgent/Finder 实机 B 层未执行） |
-| FR-6.1 ~ FR-6.7 | M01 ~ M10（文档/命令/协议契约离线关闭；真实 macOS/NAS 行为见 B 层） |
+| FR-6.1 ~ FR-6.8 | M01 ~ M11（M11 为 macOS CI 构建验收；真实 Finder/NAS 行为见 B 层） |
 
 D01（无竞态正常切换 200）与 D03（单写者内存对照）是**控制/对照场景**，不是待修缺陷，
 用于回归时证明"端口变化本身可成功、单写者因果成立"。
