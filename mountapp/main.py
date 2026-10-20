@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""小米智能存储 Finder 挂载助手 - 图形界面"""
+"""小米智能存储 Finder 挂载助手 - GUI 瘦客户端。
+
+架构（docs/specs/runtime.md v4）：发现/发布/自愈/内嵌代理全部在常驻服务进程；
+本窗口只经受保护 Unix socket 发命令、读脱敏 status，关闭窗口不停止服务。
+`main.py --service` 由 LaunchAgent 以前台常驻方式启动 ResidentService。
+"""
 import os
 import sys
-import time
 import threading
 import subprocess
 
@@ -11,9 +15,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 import tkinter as tk
-from tkinter import ttk, filedialog
-
-from app_core import AppCore
+from tkinter import ttk, filedialog  # noqa: F401
 
 ORANGE = "#ff6900"
 GREEN = "#2ecc71"
@@ -24,6 +26,76 @@ CARD = "#ffffff"
 TEXT = "#1d1d1f"
 SUBTEXT = "#6e6e73"
 BLUE = "#0a84ff"
+
+
+def human_size(n):
+    """字节数 -> 可读文本（1024 进制）；纯函数，刷新路径零写。"""
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}"
+        n /= 1024
+    return f"{n:.2f} TB"
+
+
+class _ServiceCore:
+    """把 IpcClient 适配成旧 App.refresh 期望的只读/命令接口（无后台线程、无凭证）。"""
+
+    def __init__(self, client):
+        self._c = client
+        self.config = {"auto_mount": True, "auto_start": False, "mount_dir": ""}
+        self.status_text = ""
+        self.mount_path = None
+
+    def start(self):
+        """服务已在常驻进程运行；GUI 不重复启动。"""
+        return None
+
+    def _status(self):
+        try:
+            return self._c.status()
+        except Exception as e:
+            return {"connected": False, "error": str(e), "mode": "",
+                    "webdav_port": None, "storage": [], "mounted": False,
+                    "mount_path": None}
+
+    @property
+    def conn(self):
+        snap = self._status()
+
+        class _Conn:
+            @staticmethod
+            def snapshot():
+                return snap
+
+        return _Conn()
+
+    def is_mounted(self):
+        snap = self._status()
+        self.mount_path = snap.get("mount_path")
+        return bool(snap.get("mounted"))
+
+    def mount(self):
+        return self._c.call("mount")
+
+    def unmount(self):
+        return self._c.call("unmount")
+
+    def open_in_finder(self):
+        try:
+            self._c.call("open_finder")
+            return True, self.mount_path
+        except Exception as e:
+            return False, str(e)
+
+    def set_auto_start(self, enabled):
+        try:
+            self._c.call("set_config", {"auto_start": bool(enabled)})
+        except Exception:
+            pass
+
+    def save_config(self):
+        pass
 
 
 class App(tk.Tk):
@@ -131,9 +203,13 @@ class App(tk.Tk):
 
     # ---------- 操作 ----------
     def _save_settings(self):
-        self.core.config["auto_mount"] = self.auto_mount_var.get()
+        try:
+            self.core._c.call("set_config", {
+                "auto_mount": self.auto_mount_var.get(),
+                "auto_start": self.auto_start_var.get()})
+        except Exception:
+            pass
         self.core.set_auto_start(self.auto_start_var.get())
-        self.core.save_config()
 
     def _mount(self):
         self._run_async(lambda: self.core.mount())
@@ -218,11 +294,40 @@ class App(tk.Tk):
             self.log_label.config(text=self.core.status_text)
 
 
+def _ensure_service_client():
+    """连接常驻服务；socket 缺失时幂等拉起独立服务进程（凭证不进 argv）。"""
+    from client import IpcClient
+    from service import default_socket_path
+    path = default_socket_path()
+    try:
+        c = IpcClient(path)
+        c.connect()
+        return c
+    except (FileNotFoundError, ConnectionError, OSError):
+        pass
+    # 拉起常驻服务（独立会话，凭证仅经配置/状态文件，不进命令行）
+    subprocess.Popen(
+        [sys.executable, os.path.join(BASE_DIR, "main.py"), "--service"],
+        start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import time
+    for _ in range(30):
+        try:
+            c = IpcClient(path)
+            c.connect()
+            return c
+        except (FileNotFoundError, ConnectionError, OSError):
+            time.sleep(0.3)
+    raise RuntimeError("常驻服务未在预期时间内就绪")
+
+
 def main():
-    core = AppCore()
-    app = App(core)
+    if "--service" in sys.argv:
+        from service import ResidentService
+        raise SystemExit(ResidentService().serve())
+    client = _ensure_service_client()
+    app = App(_ServiceCore(client))
     app.mainloop()
-    core.stop()
+    # GUI 关闭仅断开连接；常驻服务继续发现/自愈，不调用 stop。
 
 
 if __name__ == "__main__":
