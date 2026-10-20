@@ -65,14 +65,14 @@ static int do_mount(NSString *urlStr, NSString *mountpoint) {
     if (mountpoint.length) {
         mountPath = (__bridge CFURLRef)[NSURL fileURLWithPath:mountpoint isDirectory:YES];
     }
-    CFURLRef resultURL = NULL;
+    CFArrayRef mountpoints = NULL;
     int err = NetFSMountURLSync((__bridge CFURLRef)serverURL, mountPath,
                                 (__bridge CFStringRef)(user.length ? user : NULL),
                                 (__bridge CFStringRef)(pass.length ? pass : NULL),
-                                (__bridge CFDictionaryRef)openOptions,
-                                (__bridge CFDictionaryRef)mountOptions,
-                                &resultURL);
-    if (resultURL) CFRelease(resultURL);
+                                (__bridge CFMutableDictionaryRef)openOptions,
+                                (__bridge CFMutableDictionaryRef)mountOptions,
+                                &mountpoints);
+    if (mountpoints) CFRelease(mountpoints);
     if (err == 0) {
         printf("MOUNT_OK\n");
         return 0;
